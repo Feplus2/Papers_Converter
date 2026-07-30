@@ -101,6 +101,7 @@ _PUB_NOISE_RES = [
 _ARTICLE_LABELS = {
     "article", "review", "communication", "research article", "topical review",
     "minireview", "editorial", "letter", "perspective", "comment", "erratum",
+    "tutorial review",
 }
 
 # 噪声标题（被误判为 heading 的出版元数据）
@@ -121,6 +122,17 @@ def _clean_paragraph(text: str):
     # 剥离 RSC 页脚前缀（"Published on 17 May 2010. Downloaded on 29/07/2013 19:30:29. "），
     # 保留粘连的正文（如表注 "Table 1 Selection of ..."）；剥完为空则下面按纯噪声丢弃
     t = re.sub(r"^(?:(?:Published|Downloaded) on\s+[^.]*\.\s*)+", "", t)
+
+    # 剥离 RSC 导航/引用碎片（"View Article Online View Journal | View Issue
+    # CrossMark ← click for updates"、"Cite this: ..."、裸 "DOI: x" 前缀）
+    t = re.sub(r"\bView (?:Article Online|Journal|Issue)\b", "", t)
+    t = re.sub(r"\bCrossMark\s*←?\s*click for updates\b", "", t, flags=re.I)
+    t = re.sub(r"^Cite this:.*$", "", t, flags=re.M)
+    t = re.sub(r"^DOI:\s*\S+\s+", "", t)
+    t = re.sub(r"\s{2,}", " ", t).strip(" |")
+    t = t.strip()
+    if not t:
+        return None
 
     # 纯噪声模式
     for pat in _PUB_NOISE_RES:
@@ -237,11 +249,14 @@ def _classify_headings(blocks: list, use_llm: bool = False, title: str = "") -> 
     for i in heading_idxs:
         ctx_parts = []
         image_nearby = False
+        img_before_para = False  # 图片先于任何段落出现（图注特征；真章节标题后通常先有正文）
         for j in range(i + 1, min(i + 4, len(blocks))):
             nb = blocks[j]
             if nb.kind == "heading":
                 break
-            if nb.kind == "image":
+            if nb.kind in ("image", "table_image"):
+                if not ctx_parts:
+                    img_before_para = True
                 image_nearby = True
             elif nb.kind == "paragraph":
                 ctx_parts.append(nb.content)
@@ -250,6 +265,7 @@ def _classify_headings(blocks: list, use_llm: bool = False, title: str = "") -> 
             "level": blocks[i].level,
             "ctx": " ".join(ctx_parts)[:150],
             "image_nearby": image_nearby,
+            "img_before_para": img_before_para,
         }
 
     # 规则分类
@@ -292,8 +308,8 @@ def _rule_classify(blocks, heading_idxs, feat, title) -> dict:
         elif title_norm and (text_norm.startswith(title_norm) or title_norm in text_norm) \
                 and len(text) > len(title) * 0.8 and seen_first_heading:
             cls = "noise"
-        # 图注启发式：标题后紧跟图片（中间无其他标题）→ 很可能是图注
-        elif f["image_nearby"] and not _looks_like_real_section(text):
+        # 图注启发式：标题后紧跟图片（中间无正文段落）→ 很可能是图注
+        elif f["image_nearby"] and f["img_before_para"] and not _looks_like_real_section(text):
             cls = "figure_caption"
         # 副标题：紧跟主标题、无编号、描述性的一句话
         elif not seen_first_heading and not _has_number_prefix(text) \
@@ -368,7 +384,7 @@ def _llm_classify(blocks, heading_idxs, feat, classes, title) -> None:
     listing = []
     for k, i in enumerate(suspect):
         f = feat[i]
-        listing.append(f"[{k}] 标题: {f['text'][:80]}\n    后续内容: {f['ctx'][:100]}\n    后面紧跟图片: {'是' if f['image_nearby'] else '否'}")
+        listing.append(f"[{k}] 标题: {f['text'][:80]}\n    后续内容: {f['ctx'][:100]}\n    标题后紧跟图片（中间无正文段落）: {'是' if f['img_before_para'] else '否'}")
 
     prompt = (
         f"以下是从一篇学术论文（标题：{title[:80]}）中检测到的若干标题，请判断每个是哪种类型。\n"
@@ -522,6 +538,18 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             img_path = block.get("img_path", "")
             # 提取原始 caption（图组编号由 _assign_figure_numbers 统一处理）
             caption = _extract_caption(block)
+            # caption 混入正文（MinerU 把图下方文字栏并进 image_caption）：
+            # 小写起首的长句；或无 Fig/Table 等编号前缀的多句长段（真图注通常
+            # 1-2 句或带编号前缀）→ 拆出为段落接回阅读流
+            body_text = ""
+            if caption:
+                lower_start = len(caption) > 40 and re.match(r"^[a-z]", caption)
+                prose_like = (
+                    len(caption) > 200 and caption.count(". ") >= 3
+                    and not re.match(r"^(fig(?:ure)?\.?|table|scheme|chart|supplement|图|表)\b",
+                                     caption, re.I))
+                if lower_start or prose_like:
+                    body_text, caption = caption, ""
             result.append(ProcessedBlock(
                 "image",
                 content=caption,
@@ -530,6 +558,8 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                 img_new_name="",  # 稍后由 _assign_figure_numbers 填充
                 page_idx=page_idx,
             ))
+            if body_text:
+                result.append(ProcessedBlock("paragraph", content=body_text, page_idx=page_idx))
             continue
 
         # --- 普通文本段落 ---
@@ -830,7 +860,8 @@ _ROMAN_NUM_RE = re.compile(
 _ALPHA_NUM_RE = re.compile(r"^[A-Z]\.\s+\S")
 
 # 图注中的图编号正则（"Fig. 1" / "Figure 3" / 章节式小数编号 "Fig. 12.4"）
-_FIG_NUM_RE = re.compile(r"\bFig(?:ure|\.)?\s*(\d+(?:\.\d+)*)\b", re.IGNORECASE)
+# 尾部负向断言只排数字："Figure 5."（点后随标题）与 "(Figure 2A)"（图版字母）都要命中
+_FIG_NUM_RE = re.compile(r"\bFig(?:ure|\.)?\s*(\d+(?:\.\d+)*)(?!\d)", re.IGNORECASE)
 
 
 def _clean_spaced_heading(text: str) -> str:
@@ -1104,7 +1135,12 @@ def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBl
 
     def _is_byline(t: str) -> bool:
         ts = t.strip()
-        return ("$^{" in ts) or re.match(r"^By\s+", ts, re.IGNORECASE) is not None
+        # 署名行（多个上标，如 "X $^{1}$, Y $^{2}$"）、机构行（$^{ 开头）、"By X" 开头；
+        # 短文本限定——含大量上标的科学长段落不是署名
+        if len(ts) >= 300:
+            return False
+        return (ts.count("$^{") >= 2 or ts.startswith("$^{")
+                or re.match(r"^By\s+", ts, re.IGNORECASE) is not None)
 
     def _ends_terminal(t: str) -> bool:
         t = t.rstrip()
@@ -1120,22 +1156,31 @@ def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBl
         r"|[①-⑳]|第[0-9一二三四五六七八九十百]+[条节章节]|[A-Z]\.\s|[IVXLC]{1,4}\.\s)")
 
     def _cross_page_ok(prev_t: str, next_t: str) -> bool:
-        """跨页续段信号：后块小写/开括号起首，或前块逗号/连字符结尾"""
+        """跨页续段信号：后块小写/开括号起首，或前块逗号/连字符/虚词结尾"""
         if re.match(r"^[a-z(]", next_t):
             return True
-        return prev_t.rstrip().endswith((",", "，", "、", "-", "–", "—"))
+        if prev_t.rstrip().endswith((",", "，", "、", "-", "–", "—")):
+            return True
+        # 前块以英语虚词结尾（the/of/to/and...）——完整段落不会这样收尾
+        return bool(re.search(
+            r"\b(the|a|an|of|to|and|or|in|on|at|with|by|from|as|is|are|was|were|be|been|that|which|for|not|no)$",
+            prev_t.rstrip(), re.I))
 
     result: list[ProcessedBlock] = []
     last_para_idx: int | None = None
+    gap_block = False  # 最后段落与当前块之间隔着图片/表格（Popo 式跨块配对）
     for block in blocks:
         if block.kind == "paragraph":
             if last_para_idx is not None:
                 prev = result[last_para_idx]
                 same_page = block.page_idx == prev.page_idx
                 cross_page = block.page_idx == prev.page_idx + 1
+                # 跨页、或中间隔了图/表（句子被插图打断）：需续段信号；
+                # 有信号背书时长度门槛放宽（链式合并会让前块持续增长）
+                need_signal = gap_block or cross_page
                 if (
-                    (same_page or (cross_page and _cross_page_ok(prev.content, block.content)))
-                    and len(prev.content) < 200
+                    ((same_page and not need_signal) or (need_signal and _cross_page_ok(prev.content, block.content)))
+                    and len(prev.content) < (4000 if need_signal else 200)
                     and not _ends_terminal(prev.content)
                     and not _LIST_ITEM_RE.match(block.content)
                     and not (prev.content[:1].isdigit() and block.content[:1].isdigit())
@@ -1144,13 +1189,18 @@ def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBl
                 ):
                     # 合并：用空格连接
                     prev.content = prev.content.rstrip() + " " + block.content.lstrip()
+                    gap_block = False
                     continue
             result.append(block)
             last_para_idx = len(result) - 1
+            gap_block = False
             continue
         result.append(block)
-        if block.kind != "page_anchor":
+        if block.kind in ("heading", "equation", "reference"):
             last_para_idx = None
+            gap_block = False
+        elif block.kind in ("image", "table", "table_image") and last_para_idx is not None:
+            gap_block = True
 
     return result
 
