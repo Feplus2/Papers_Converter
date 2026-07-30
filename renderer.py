@@ -1,0 +1,210 @@
+"""Stage 3: Pandoc Markdown 渲染。
+
+将处理后的 IR 渲染为符合 paper-format-contract.md 的 Pandoc Markdown，
+并管理图片复制和输出目录结构。
+"""
+
+import logging
+import shutil
+from pathlib import Path
+
+import yaml
+
+from content_processor import ProcessedBlock
+
+logger = logging.getLogger(__name__)
+
+
+class _FoldedScalar(str):
+    """标记为折叠块标量（>-）的字符串，避免 PyYAML 按宽度硬换行。"""
+    pass
+
+
+def _folded_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=">")
+
+
+yaml.add_representer(_FoldedScalar, _folded_representer)
+
+
+def render_paper(
+    blocks: list[ProcessedBlock],
+    metadata: dict,
+    output_dir: Path,
+    slug: str,
+    source_pdf: Path | None = None,
+    images_source_dir: Path | None = None,
+) -> Path:
+    """
+    渲染论文为 Pandoc Markdown 并输出到目录。
+
+    Args:
+        blocks: 处理后的 ProcessedBlock 列表
+        metadata: frontmatter 元数据 dict
+        output_dir: 输出根目录
+        slug: 论文 slug
+        source_pdf: 可选的源 PDF 路径
+        images_source_dir: 原始图片目录
+
+    Returns:
+        paper.md 的完整路径
+    """
+    # 创建输出目录
+    paper_dir = output_dir / slug
+    paper_dir.mkdir(parents=True, exist_ok=True)
+    images_out_dir = paper_dir / "images"
+    # 清空旧图片，避免多次运行后残留
+    if images_out_dir.exists():
+        for f in images_out_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+    images_out_dir.mkdir(exist_ok=True)
+
+    # 渲染 frontmatter
+    frontmatter_str = _render_frontmatter(metadata)
+
+    # 渲染正文
+    body_str = _render_body(blocks, images_source_dir, images_out_dir)
+
+    # 组合最终文档
+    doc = frontmatter_str + "\n" + body_str
+
+    # 写入文件（UTF-8 + LF）
+    paper_md_path = paper_dir / "paper.md"
+    paper_md_path.write_text(doc, encoding="utf-8", newline="\n")
+
+    # 复制 source.pdf（可选）
+    if source_pdf and source_pdf.exists():
+        shutil.copy2(source_pdf, paper_dir / "source.pdf")
+
+    logger.info(f"  输出: {paper_md_path}")
+    return paper_md_path
+
+
+def _render_frontmatter(metadata: dict) -> str:
+    """渲染 YAML frontmatter"""
+    # 构建有序的 frontmatter 字段
+    fm = {}
+
+    # 必填字段
+    fm["title"] = metadata.get("title", "Untitled")
+
+    # author: 结构化作者列表
+    authors = metadata.get("author", [])
+    if authors:
+        fm["author"] = authors
+    else:
+        fm["author"] = [{"name": "Unknown"}]
+
+    fm["date"] = str(metadata.get("date", ""))
+
+    # abstract 用折叠块标量（>-），避免 PyYAML 按宽度硬换行
+    abstract = metadata.get("abstract", "")
+    fm["abstract"] = _FoldedScalar(abstract) if abstract else ""
+
+    # 可选字段
+    if metadata.get("doi"):
+        fm["doi"] = metadata["doi"]
+    if metadata.get("container-title"):
+        fm["container-title"] = metadata["container-title"]
+    if metadata.get("keywords"):
+        fm["keywords"] = metadata["keywords"]
+    if metadata.get("volume"):
+        fm["volume"] = str(metadata["volume"])
+    if metadata.get("issue"):
+        fm["issue"] = str(metadata["issue"])
+    if metadata.get("page"):
+        fm["page"] = str(metadata["page"])
+    # 额外 CSL 变量原样直传（契约 §三：渲染器忽略未知字段，pandoc --citeproc 可消费）
+    for csl_key in ("type", "URL", "ISSN", "publisher"):
+        if metadata.get(csl_key):
+            fm[csl_key] = str(metadata[csl_key])
+    if metadata.get("arxiv"):
+        fm["arxiv"] = metadata["arxiv"]
+    if metadata.get("zotero_key"):
+        fm["zotero_key"] = metadata["zotero_key"]
+
+    fm["lang"] = metadata.get("lang", "en")
+
+    # 使用自定义 Dumper：abstract 走折叠块标量，宽度放大防止硬换行
+    yaml_str = yaml.dump(
+        fm,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+        width=4096,
+    )
+
+    return f"---\n{yaml_str}---\n"
+
+
+def _render_body(
+    blocks: list[ProcessedBlock],
+    images_source_dir: Path | None,
+    images_out_dir: Path,
+) -> str:
+    """渲染正文 Markdown"""
+    lines = []
+    prev_kind = None
+
+    for block in blocks:
+        # 段落间距控制
+        if block.kind in ("heading", "page_anchor") and prev_kind and prev_kind != "page_anchor":
+            lines.append("")
+        elif block.kind == "paragraph" and prev_kind in ("paragraph", "reference", "table"):
+            lines.append("")
+        elif block.kind in ("image", "equation", "table") and prev_kind:
+            lines.append("")
+
+        if block.kind == "page_anchor":
+            lines.append(f"<!-- page: {block.content} -->")
+
+        elif block.kind == "heading":
+            prefix = "#" * min(block.level, 6)
+            lines.append(f"{prefix} {block.content}")
+
+        elif block.kind == "paragraph":
+            # 单行书写
+            text = block.content.replace("\n", " ").strip()
+            lines.append(text)
+
+        elif block.kind == "image":
+            # 复制图片
+            if images_source_dir and block.img_src:
+                src_path = images_source_dir / Path(block.img_src).name
+                if not src_path.exists():
+                    # 尝试直接用 img_src 作为相对路径
+                    src_path = images_source_dir / block.img_src
+                if src_path.exists():
+                    dst_path = images_out_dir / block.img_new_name
+                    shutil.copy2(src_path, dst_path)
+                else:
+                    logger.warning(f"  图片未找到: {block.img_src}")
+
+            # Markdown 图片语法（content 已由 _assign_figure_numbers 格式化为 "Figure N: caption"）
+            caption = block.content or block.caption or "Figure"
+            lines.append(f"![{caption}](images/{block.img_new_name})")
+
+        elif block.kind == "equation":
+            lines.append(block.content)
+
+        elif block.kind == "reference":
+            lines.append(block.content)
+
+        elif block.kind == "table":
+            # HTML 表体原样输出（契约 §四：复杂表格用 HTML <table>）；
+            # caption 作独立段落置于表前，表前后留空行避免被 CommonMark
+            # HTML 块吞掉后续正文
+            if block.caption:
+                lines.append(block.caption)
+                lines.append("")
+            lines.append(block.content)
+
+        prev_kind = block.kind
+
+    # 确保文件以换行结尾
+    text = "\n".join(lines)
+    if not text.endswith("\n"):
+        text += "\n"
+
+    return text

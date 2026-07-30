@@ -1,0 +1,1007 @@
+"""Stage 2: 正文清洗与结构重建。
+
+将 MinerU content_list 处理为结构化的中间表示（IR），
+供 renderer 渲染为 Pandoc Markdown。
+"""
+
+import json
+import logging
+import re
+from html import unescape
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_inline(text: str) -> str:
+    r"""归一化 MinerU 文本中的内联 HTML 与特殊空白。
+
+    现行 VLM 输出在正文里夹带 <sup>/<sub> HTML 标签与   不换行空格
+    （旧产物是 $^{}$ LaTeX 形式），统一转为 LaTeX 上/下标，避免标签漏进 paper.md。
+    """
+    if "<" in text:
+        text = re.sub(r"<sup>\s*</sup>", "", text)
+        text = re.sub(r"<sub>\s*</sub>", "", text)
+        # 纯脚注符号（\* * † ‡ § ¶ # ☒ ✉）不包 LaTeX（$^{\*}$ 等非法 KaTeX）
+        text = re.sub(r"<sup>([\\*†‡§¶#☒✉\s]+)</sup>", r"\1", text)
+        text = re.sub(r"<sup>(.*?)</sup>", r"$^{\1}$", text, flags=re.S)
+        text = re.sub(r"<sub>(.*?)</sub>", r"$_{\1}$", text, flags=re.S)
+        # 样式标签（<i>/<em>/<b>/<u>/<span>）只去标签留内容（Zotero 标题常带 <i>via</i>）
+        text = re.sub(r"</?(?:i|em|b|u|span)(?:\s[^>]*)?>", "", text)
+    if "\xa0" in text:
+        text = text.replace("\xa0", " ")
+    return text
+
+# 噪声块类型（直接丢弃）
+_NOISE_TYPES = {"header", "footer", "page_number", "aside_text"}
+
+# 封面页检测关键词
+_COVER_PAGE_MARKERS = [
+    "university of technology",
+    "citation (apa)",
+    "document version",
+    "important note",
+    "takedown policy",
+    "downloaded from",
+    "for technical reasons",
+]
+
+# 固定段标题（不自动编号）
+_FIXED_SECTIONS = {
+    "abstract", "摘要", "acknowledgments", "acknowledgements", "references",
+    "references and notes", "supplementary materials", "supporting information",
+    "author contributions", "competing interests", "data availability",
+    "methods", "experimental", "experimental section",
+    "one sentence summary", "highlights", "keywords", "graphical abstract",
+    "authorship", "author information", "additional information",
+    "code availability", "materials availability", "supplemental information",
+    "conflict of interest", "conflicts of interest", "acronyms",
+}
+
+# 正文锚点词：Nature 式无编号论文里的顶级章节词（Introduction/Methods/Results...）。
+# 它们本身是顶级标题；锚点之后出现的其他无编号标题视为其子节（##）。
+_BODY_ANCHOR_WORDS = {
+    "introduction", "background", "methods", "methodology",
+    "experimental", "experimental section", "experimental procedures",
+    "materials and methods", "results", "results and discussion",
+    "discussion", "conclusion", "conclusions", "summary",
+    "outlook", "perspective",
+}
+
+# 出版信息噪声模式（Nature/Springer/IOP/Elsevier 等出版社的封面元数据残留）
+_PUB_NOISE_RES = [
+    re.compile(r"^Article\s+https?://doi\.org/", re.I),
+    re.compile(r"^https?://doi\.org/\S+\s+(Received|Accepted|Published|RECEIVED|\d{4})", re.I),
+    re.compile(r"^To cite this article", re.I),
+    re.compile(r"^Cite as\b", re.I),
+    re.compile(r"^You may also like\b", re.I),
+    re.compile(r"^www\.\S+\s*$", re.I),
+    re.compile(r"^\S+\.(org|de|li)/\S*\s*$", re.I),
+    re.compile(r"^©", re.I),
+    re.compile(r"Creative Commons", re.I),
+    re.compile(r"open[- ]access article distributed", re.I),
+    re.compile(r"^This is an open access", re.I),
+    re.compile(r"^Copyright:", re.I),
+    re.compile(r"^Check for updates\s*$", re.I),
+    re.compile(r"^OPEN ACCESS\b", re.I),
+    re.compile(r"^https?://doi\.org/\S+\s*$", re.I),
+    re.compile(r"^10\.\d{4,}/\S+\s*$", re.I),   # 裸 DOI行（无 https 前缀）
+    re.compile(r"\b(View the article online|Terms of service|Use of this article|Reprints and permissions)\b", re.I),
+    re.compile(r"^(Permissions|Download PDF|Cite this|Metrics|Share|Read Online)\s*$", re.I),
+    # 出版日期行（关键词+日期/月份/online，避免误伤 "Published studies..." 正文）
+    re.compile(r"^(Received|Accepted|Revised|Published|Final version)\s*[:,]?\s*(\d|January|February|March|April|May|June|July|August|September|October|November|December|online|in revised|for publication)", re.I),
+    re.compile(r"^(RECEIVED|ACCEPTED|PUBLISHED)\b", re.I),
+    re.compile(r"^Received in revised", re.I),
+]
+
+# 文章类型标签（整块仅是一个标签词）
+_ARTICLE_LABELS = {
+    "article", "review", "communication", "research article", "topical review",
+    "minireview", "editorial", "letter", "perspective", "comment", "erratum",
+}
+
+# 噪声标题（被误判为 heading 的出版元数据）
+_NOISE_HEADINGS = {"you may also like", "journal of physics", "contents", "chemical reviews"}
+
+
+def _clean_paragraph(text: str):
+    """清洗出版信息噪声。返回 None 表示纯噪声应丢弃，否则返回清洗后的文本。
+
+    处理两类：
+    1. 纯噪声块（文章类型标签/独立 DOI+日期/版权/网址/推荐列表）→ 丢弃
+    2. 粘连块（"...Check for updates <正文>"）→ 剥离前缀保留正文
+    """
+    t = text.strip()
+    if not t:
+        return None
+
+    # 纯噪声模式
+    for pat in _PUB_NOISE_RES:
+        if pat.search(t):
+            # 但若是 "Published online: ... Check for updates <正文>"，剥离前缀保留正文
+            m = re.search(r"\bCheck for updates\s+", t)
+            if m and m.start() < 250 and len(t[m.end():].strip()) > 150:
+                return t[m.end():].strip()
+            return None
+
+    # 文章类型标签（整块就是一个标签词，如 "Article" / "TOPICAL REVIEW • OPEN ACCESS"）
+    letters_only = re.sub(r"[^a-zA-Z ]", " ", t)
+    if len(t) < 60 and re.sub(r"\s+", " ", letters_only).strip().lower() in _ARTICLE_LABELS:
+        return None
+
+    # 栏目名/分类标签（如 "LITHIUM BATTERIES"）：短小且匹配噪声标题模式
+    if len(t) < 60 and any(p.search(t) for p in _NOISE_HEADING_RES):
+        return None
+
+    # 剥离 "Article https://doi.org/... " 前缀
+    t = re.sub(r"^Article\s+https?://doi\.org/\S+\s+", "", t)
+    # 剥离 Nature "...Check for updates " 前缀
+    m = re.search(r"\bCheck for updates\s+", t)
+    if m and m.start() < 250:
+        t = t[m.end():].strip()
+    return t or None
+
+
+class ProcessedBlock:
+    """处理后的内容块（IR）"""
+
+    def __init__(self, kind: str, content: str = "", **kwargs):
+        self.kind = kind  # "heading", "paragraph", "image", "equation", "reference", "page_anchor", "table"
+        self.content = content
+        self.level = kwargs.get("level", 1)  # heading level
+        self.caption = kwargs.get("caption", "")
+        self.img_src = kwargs.get("img_src", "")  # 原始图片路径
+        self.img_new_name = kwargs.get("img_new_name", "")  # 重命名后
+        self.page_idx = kwargs.get("page_idx", 0)
+
+    def __repr__(self):
+        return f"<{self.kind}: {self.content[:50]}...>"
+
+
+def process_content(content_list: list[dict], images_dir: str = "",
+                    use_llm: bool = False, title: str = "") -> list[ProcessedBlock]:
+    """
+    处理 content_list，返回结构化的 ProcessedBlock 列表。
+
+    Args:
+        content_list: MinerU content_list.json 内容
+        images_dir: 原始图片目录路径
+        use_llm: 是否用 LLM 辅助标题结构分类（区分章节/图注/噪声）
+        title: 论文标题（供标题分类参考）
+
+    Returns:
+        ProcessedBlock 列表
+    """
+    # Step 1: 检测并跳过封面页
+    cover_pages = _detect_cover_pages(content_list)
+    if cover_pages:
+        logger.info(f"  检测到封面页: {cover_pages}，将跳过")
+
+    # Step 2: 过滤噪声块
+    filtered = []
+    for block in content_list:
+        page_idx = block.get("page_idx", 0)
+        if page_idx in cover_pages:
+            continue
+        if block["type"] in _NOISE_TYPES:
+            continue
+        # 跳过 page_footnote（通常是作者信息脚注，已提取到 metadata）
+        if block["type"] == "page_footnote":
+            continue
+        filtered.append(block)
+
+    # Step 3: 构建 IR
+    blocks = _build_ir(filtered, images_dir)
+
+    # Step 4: 标题结构分类（区分章节/图注/噪声/副标题）
+    blocks = _classify_headings(blocks, use_llm=use_llm, title=title)
+
+    # Step 5: 后处理（heading 层级重建、编号、空段清理）
+    blocks = _post_process(blocks)
+
+    return blocks
+
+
+# 噪声标题模式（被误标为 heading 的出版元数据/栏目名）
+_NOISE_HEADING_RES = [
+    re.compile(r"^(insights|perspectives|review|reviews|article|communication|editorial|letter|perspective)\b", re.I),
+    re.compile(r"^(lithium|sodium|potassium|battery|batteries|chemistry|physics|materials?)\s+(batteries|reviews?|insights?)$", re.I),
+    re.compile(r"^\d+\s+\w.*\b(permissions|terms of service|view the article)\b", re.I),
+    re.compile(r"^Science\s+\d+\s*\(", re.I),  # "Science 369 (6500), ..." 引用块
+]
+
+
+def _classify_headings(blocks: list, use_llm: bool = False, title: str = "") -> list:
+    """标题结构分类：区分真章节 / 图注 / 噪声 / 副标题。
+
+    规则启发式始终运行；use_llm 时再用 LLM 校正（对图注/噪声更准）。
+    图注/副标题 → 降为段落（不进 TOC）；噪声 → 移除。
+    """
+    heading_idxs = [i for i, b in enumerate(blocks) if b.kind == "heading"]
+    if not heading_idxs:
+        return blocks
+
+    # 收集每个标题的上下文特征
+    feat = {}
+    for i in heading_idxs:
+        ctx_parts = []
+        image_nearby = False
+        for j in range(i + 1, min(i + 4, len(blocks))):
+            nb = blocks[j]
+            if nb.kind == "heading":
+                break
+            if nb.kind == "image":
+                image_nearby = True
+            elif nb.kind == "paragraph":
+                ctx_parts.append(nb.content)
+        feat[i] = {
+            "text": blocks[i].content,
+            "level": blocks[i].level,
+            "ctx": " ".join(ctx_parts)[:150],
+            "image_nearby": image_nearby,
+        }
+
+    # 规则分类
+    classes = _rule_classify(blocks, heading_idxs, feat, title)
+
+    # LLM 校正（仅对规则拿不准的标题）
+    if use_llm:
+        _llm_classify(blocks, heading_idxs, feat, classes, title)
+
+    # 应用分类结果
+    drop_idxs = set()
+    for i in heading_idxs:
+        cls = classes.get(i, "section")
+        if cls == "noise":
+            drop_idxs.add(i)
+        elif cls in ("figure_caption", "subtitle"):
+            blocks[i].kind = "paragraph"  # 降为段落，不进 TOC
+
+    if drop_idxs:
+        blocks = [b for i, b in enumerate(blocks) if i not in drop_idxs]
+    return blocks
+
+
+def _rule_classify(blocks, heading_idxs, feat, title) -> dict:
+    """规则启发式分类标题。"""
+    classes = {}
+    title_norm = re.sub(r"\s+", " ", title).lower().strip() if title else ""
+    seen_first_heading = False
+
+    for i in heading_idxs:
+        f = feat[i]
+        text = f["text"]
+        text_norm = re.sub(r"\s+", " ", text).lower().strip()
+        cls = "section"
+
+        # 噪声标题：栏目名/引用元数据
+        if any(p.search(text) for p in _NOISE_HEADING_RES):
+            cls = "noise"
+        # 标题重复（末页引用块常重复论文标题+作者）
+        elif title_norm and (text_norm.startswith(title_norm) or title_norm in text_norm) \
+                and len(text) > len(title) * 0.8 and seen_first_heading:
+            cls = "noise"
+        # 图注启发式：标题后紧跟图片（中间无其他标题）→ 很可能是图注
+        elif f["image_nearby"] and not _looks_like_real_section(text):
+            cls = "figure_caption"
+        # 副标题：紧跟主标题、无编号、描述性的一句话
+        elif not seen_first_heading and not _has_number_prefix(text) \
+                and f["level"] == 1 and len(text) < 200:
+            # 第一个标题是主标题；若其后紧跟另一个 lvl=1 描述句，判为副标题
+            pass  # 交给下方 subtitle 逻辑
+
+        # 副标题检测：主标题之后第一个非编号、描述性、带上下文为空的 lvl1 标题
+        if cls == "section" and not seen_first_heading and f["level"] == 1 \
+                and not _has_number_prefix(text) and not f["ctx"]:
+            # 主标题本身（第一个）保留；这里不处理第一个
+            pass
+
+        classes[i] = cls
+        seen_first_heading = True
+
+    # 副标题：主标题（第一个 heading）之后、正文之前，紧跟的第二个 lvl1 描述性标题
+    if len(heading_idxs) >= 2:
+        first_i = heading_idxs[0]
+        second_i = heading_idxs[1]
+        f2 = feat[second_i]
+        if (classes.get(first_i) == "section" and f2["level"] == 1
+                and not _has_number_prefix(f2["text"])
+                and not _looks_like_real_section(f2["text"])):
+            classes[second_i] = "subtitle"
+
+    return classes
+
+
+def _looks_like_real_section(text: str) -> bool:
+    """判断标题是否像真章节名（有编号，或是常见章节词）。"""
+    if _has_number_prefix(text):
+        return True
+    t = re.sub(r"\s+", " ", text).lower().strip().rstrip(":.")
+    real_section_words = {
+        "abstract", "摘要", "introduction", "background", "methods", "methodology",
+        "experimental", "results", "results and discussion", "discussion",
+        "conclusion", "conclusions", "summary", "references", "references and notes",
+        "acknowledgments", "acknowledgements", "supplementary materials",
+        "supporting information", "data availability", "author contributions",
+        "competing interests", "materials and methods", "outlook", "perspective",
+    }
+    return t in real_section_words
+
+
+def _llm_classify(blocks, heading_idxs, feat, classes, title) -> None:
+    """用 LLM 校正标题分类（就地修改 classes）。"""
+    try:
+        from openai import OpenAI
+        import config
+    except ImportError:
+        return
+    if not getattr(config, "DEEPSEEK_API_KEY", None):
+        return
+
+    # 只把规则判为 section 但可疑的（无编号、非典型章节词）交给 LLM
+    # 跳过第一个标题（论文主标题，始终保留为 heading）
+    first_heading = heading_idxs[0] if heading_idxs else None
+    suspect = []
+    for i in heading_idxs:
+        if i == first_heading:
+            continue
+        if classes.get(i) != "section":
+            continue
+        text = feat[i]["text"]
+        if _has_number_prefix(text) or _looks_like_real_section(text):
+            continue
+        suspect.append(i)
+    if not suspect:
+        return
+
+    listing = []
+    for k, i in enumerate(suspect):
+        f = feat[i]
+        listing.append(f"[{k}] 标题: {f['text'][:80]}\n    后续内容: {f['ctx'][:100]}\n    后面紧跟图片: {'是' if f['image_nearby'] else '否'}")
+
+    prompt = (
+        f"以下是从一篇学术论文（标题：{title[:80]}）中检测到的若干标题，请判断每个是哪种类型。\n"
+        "类型说明：\n"
+        "- section: 真正的章节标题（如 Introduction/Results/某方法名）\n"
+        "- figure_caption: 图片/图表的说明标题（描述某张图，常紧跟图片）\n"
+        "- noise: 栏目名、引用元数据、重复标题等噪声\n"
+        "- subtitle: 论文主标题的副标题/dek\n\n"
+        "待分类标题：\n" + "\n".join(listing) + "\n\n"
+        '返回严格 JSON：{"结果": [{"idx": 0, "type": "figure_caption"}, ...]}，不要其他文字。'
+    )
+    try:
+        client = OpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_BASE_URL)
+        resp = client.chat.completions.create(
+            model=config.DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": "你是学术论文结构分析专家。只返回 JSON。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=1000,
+        )
+        content = resp.choices[0].message.content.strip()
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            data = json.loads(re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', content))
+        items = data.get("结果", data.get("results", []))
+        valid = {"section", "figure_caption", "noise", "subtitle"}
+        for item in items:
+            k = item.get("idx")
+            typ = item.get("type")
+            if isinstance(k, int) and 0 <= k < len(suspect) and typ in valid:
+                classes[suspect[k]] = typ
+        logger.info(f"  LLM 标题分类校正: {len(items)} 项")
+    except Exception as e:
+        logger.warning(f"  LLM 标题分类失败（保留规则结果）: {e}")
+
+
+def _detect_cover_pages(content_list: list[dict]) -> set[int]:
+    """检测封面页（如大学仓库的封面页）"""
+    cover_pages = set()
+
+    # 只检查前 2 页
+    for page_idx in range(2):
+        page_text = " ".join(
+            block.get("text", "").lower()
+            for block in content_list
+            if block.get("page_idx", 0) == page_idx
+        )
+        # 如果页面包含多个封面标记，判定为封面页
+        markers_found = sum(1 for m in _COVER_PAGE_MARKERS if m in page_text)
+        if markers_found >= 2:
+            cover_pages.add(page_idx)
+
+    return cover_pages
+
+
+def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
+    """将过滤后的块转换为 IR"""
+    result = []
+    current_page = -1
+    in_references = False
+    skip_related = False  # 跳过 "You may also like" 推荐列表项
+
+    for block in blocks:
+        page_idx = block.get("page_idx", 0)
+        block_type = block["type"]
+        text = _normalize_inline(block.get("text", "").strip())
+
+        # 页码锚点
+        if page_idx != current_page:
+            current_page = page_idx
+            result.append(ProcessedBlock("page_anchor", content=str(page_idx + 1), page_idx=page_idx))
+
+        # 跳过空文本块（非图片/公式/表格）
+        if not text and block_type not in ("image", "chart", "equation", "table"):
+            continue
+
+        # --- Heading ---
+        if block_type == "text" and block.get("text_level"):
+            # 跳过噪声标题（"You may also like" / 期刊名等出版元数据）
+            hnorm = re.sub(r"\s+", " ", text).lower().rstrip(":.")
+            if any(nh in hnorm for nh in _NOISE_HEADINGS):
+                if "you may also like" in hnorm:
+                    skip_related = True
+                continue
+            # 遇到真实标题，结束推荐列表跳过
+            skip_related = False
+            # 检查是否进入参考文献区
+            if _is_reference_heading(text):
+                in_references = True
+            else:
+                in_references = False
+            # text_level 仅作弱提示；真实层级由 _assign_heading_levels 重建
+            result.append(ProcessedBlock("heading", content=text, level=block["text_level"]))
+            continue
+
+        # --- 参考文献 ---
+        if block_type == "ref_text" or in_references:
+            if text:
+                result.append(ProcessedBlock("reference", content=text))
+            continue
+
+        # --- 公式 ---
+        if block_type == "equation":
+            # 确保 $$ 包裹
+            eq_text = text
+            if not eq_text.startswith("$$"):
+                eq_text = f"$$\n{eq_text}\n$$"
+            result.append(ProcessedBlock("equation", content=eq_text))
+            continue
+
+        # --- 表格 ---
+        if block_type == "table":
+            # MinerU 的 table_body 是现成 HTML（含 colspan/rowspan），
+            # 契约约定复杂表格直接用 HTML <table>，原样透传；
+            # 但先拆分 MinerU 把正文/标题合并进表格的版面缺陷单元格
+            body = (block.get("table_body") or "").strip()
+            caption = _extract_table_caption(block)
+            if body:
+                body, rescued = _rescue_prose_cells(body, page_idx)
+                if body:
+                    result.append(ProcessedBlock(
+                        "table", content=body, caption=caption, page_idx=page_idx,
+                    ))
+                result.extend(rescued)
+            elif block.get("img_path"):
+                # 无 HTML 表体时退化为图片，避免整表静默丢失
+                result.append(ProcessedBlock(
+                    "image",
+                    content=caption or "Table",
+                    caption=caption,
+                    img_src=block["img_path"],
+                    page_idx=page_idx,
+                ))
+            continue
+
+        # --- 图片/图表 ---
+        if block_type in ("image", "chart"):
+            img_path = block.get("img_path", "")
+            # 提取原始 caption（图组编号由 _assign_figure_numbers 统一处理）
+            caption = _extract_caption(block)
+            result.append(ProcessedBlock(
+                "image",
+                content=caption,
+                caption=caption,
+                img_src=img_path,
+                img_new_name="",  # 稍后由 _assign_figure_numbers 填充
+                page_idx=page_idx,
+            ))
+            continue
+
+        # --- 普通文本段落 ---
+        if block_type == "text" and text:
+            # 跳过推荐列表项（"You may also like" 之后的 "- " 项）
+            if skip_related and re.match(r"^\\?-\s", text):
+                continue
+            # 清洗出版信息噪声（纯噪声返回 None 丢弃；粘连块剥离前缀）
+            cleaned = _clean_paragraph(text)
+            if cleaned is None:
+                continue
+            text = cleaned
+            # 检测是否是摘要段（"Abstract: ..." / "Conspectus: ..." 格式）
+            abstract_match = re.match(r"^(?:abstract|conspectus)[:\.\s]+(.+)", text, re.IGNORECASE | re.DOTALL)
+            if abstract_match:
+                # 先插入 Abstract heading
+                result.append(ProcessedBlock("heading", content="Abstract", level=1))
+                result.append(ProcessedBlock("paragraph", content=abstract_match.group(1).strip()))
+                continue
+            # 中文摘要（"摘 要 ..." / 允许机构行等短前缀粘连："（xx大学...) 摘 要 ..."）
+            # 前缀以汉字/字母结尾说明"摘要"在句中（如"本文摘要"），不拆
+            zh_match = re.match(r"^(.*?)\s*(摘\s*要)[:：\s]+(.+)", text, re.DOTALL)
+            if zh_match and len(zh_match.group(1)) < 200 \
+                    and not re.search(r"[A-Za-z0-9\u4e00-\u9fff]$", zh_match.group(1)):
+                prefix = zh_match.group(1).strip()
+                if prefix:
+                    result.append(ProcessedBlock("paragraph", content=prefix))
+                result.append(ProcessedBlock("heading", content="摘要", level=1))
+                result.append(ProcessedBlock("paragraph", content=zh_match.group(3).strip()))
+            else:
+                result.append(ProcessedBlock("paragraph", content=text))
+
+    return result
+
+
+def _is_reference_heading(text: str) -> bool:
+    """判断是否是参考文献标题"""
+    lower = text.lower().rstrip(":.")
+    return lower in ("references", "references and notes", "bibliography", "works cited")
+
+
+def _extract_caption(block: dict) -> str:
+    """从图片/图表块提取 caption"""
+    # 优先 chart_caption，再 image_caption
+    captions = block.get("chart_caption", []) or block.get("image_caption", [])
+    if not captions:
+        return ""
+
+    # 合并所有 caption 行
+    parts = []
+    for cap in captions:
+        cap = _normalize_inline(cap.strip())
+        # 跳过单字母标记（如 "A", "B", "C", "D"）
+        if len(cap) <= 2 and cap.isalpha():
+            continue
+        parts.append(cap)
+
+    return " ".join(parts)
+
+
+def _extract_table_caption(block: dict) -> str:
+    """从表格块提取 caption（table_caption 列表合并）"""
+    captions = block.get("table_caption") or []
+    return " ".join(c.strip() for c in captions if c.strip())
+
+
+# 表格内正文单元格判据：≥200 字符且含英文句子结构（正常数据表单元格不会命中）
+_PROSE_CELL_MIN = 200
+
+
+def _rescue_prose_cells(html_str: str, page_idx: int = 0) -> tuple[str, list]:
+    """拆分 MinerU 把正文/标题合并进表格 HTML 的版面缺陷单元格。
+
+    实测案例：双栏页左栏缩写表 + 右栏 "1 Introduction" 全部正文被并进
+    同一 <table>（正文藏在 colspan/rowspan 大单元格里），重解析也一样。
+    保守判据（正常数据表不会命中）：
+      - 正文单元格：纯文本 ≥200 字符且含句子结构 → 拆出为段落
+      - 编号标题单元格：跨列、短文本、点号编号前缀（"1 Introduction"）→ 拆出为标题
+    返回 (清理后的 table HTML, 拆出的 ProcessedBlock 列表)。
+    """
+    rows = re.findall(r"<tr[^>]*>.*?</tr>", html_str, re.S | re.I)
+    if not rows:
+        return html_str, []
+
+    kept_rows = []
+    rescued: list[ProcessedBlock] = []
+    for row in rows:
+        kept_cells = []
+        for cell in re.findall(r"<t[dh][^>]*>.*?</t[dh]>", row, re.S | re.I):
+            text = unescape(re.sub(r"<[^>]+>", "", cell))
+            text = re.sub(r"\s+", " ", text).strip()
+            if len(text) >= _PROSE_CELL_MIN and re.search(r"[a-zA-Z]\. [A-Z(]", text):
+                rescued.append(ProcessedBlock("paragraph", content=text, page_idx=page_idx))
+                continue
+            attrs = cell[: cell.index(">")]
+            m = re.search(r'colspan="(\d+)"', attrs)
+            colspan = int(m.group(1)) if m else 1
+            if colspan >= 2 and 0 < len(text) < 120 and _DOTTED_NUM_RE.match(text):
+                rescued.append(ProcessedBlock("heading", content=text, level=1, page_idx=page_idx))
+                continue
+            kept_cells.append(cell)
+        if kept_cells:
+            kept_rows.append("<tr>" + "".join(kept_cells) + "</tr>")
+
+    clean = "<table>" + "".join(kept_rows) + "</table>" if kept_rows else ""
+    return clean, rescued
+
+
+def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
+    """后处理：层级重建、段落合并、编号、清理"""
+    # 1. 合并段落碎片
+    blocks = _merge_paragraph_fragments(blocks)
+
+    # 2. 重建 heading 层级（编号前缀解析 + 形状栈）
+    _assign_heading_levels(blocks)
+
+    # 3. 图组编号（子图归并到所属 Figure）
+    _assign_figure_numbers(blocks)
+
+    # 4. 为无编号体系的论文补编号
+    _add_numbering(blocks)
+
+    # 5. 清理连续空锚点 + 首尾锚点
+    result = []
+    last_was_anchor = False
+    for block in blocks:
+        if block.kind == "page_anchor":
+            if last_was_anchor:
+                continue
+            last_was_anchor = True
+            result.append(block)
+            continue
+        last_was_anchor = False
+        result.append(block)
+
+    while result and result[0].kind == "page_anchor":
+        result.pop(0)
+    while result and result[-1].kind == "page_anchor":
+        result.pop()
+
+    return result
+
+
+# 编号前缀正则
+_DOTTED_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+)")     # "2 Foo" / "3.1 Bar" / "3.1.1 Baz"
+_PAREN_NUM_RE = re.compile(r"^[（(](\d+)[）)]\.?\s+(.+)")        # "(1) Foo" / "（1） Foo"
+# 罗马数字章节编号（APS 风格 "I. INTRODUCTION"）及其下的字母编号（"A. Motivation"）
+# 枚举 I–XV：单字母 C/D/L 不匹配——它们在论文里几乎总是字母小节标签（A. B. C.），
+# 作为罗马数字（100/500/50）的章节编号不会出现
+_ROMAN_NUM_RE = re.compile(
+    r"^(?:I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV)\.\s+\S")
+_ALPHA_NUM_RE = re.compile(r"^[A-Z]\.\s+\S")
+
+# 图注中的图编号正则（"Fig. 1" / "Figure 3" / 章节式小数编号 "Fig. 12.4"）
+_FIG_NUM_RE = re.compile(r"\bFig(?:ure|\.)?\s*(\d+(?:\.\d+)*)\b", re.IGNORECASE)
+
+
+def _clean_spaced_heading(text: str) -> str:
+    """归一化空格拆字标题："A B S T R A C T" → "Abstract"。
+
+    仅处理每个字母间都用空格隔开的样式（全部为单字符 token），
+    避免误伤正常的多单词标题。
+    """
+    if re.match(r"^\s*[A-Za-z](?:\s+[A-Za-z])+\s*$", text):
+        word = re.sub(r"\s+", "", text)
+        return word.capitalize()
+    return text
+
+
+def _assign_heading_levels(blocks: list[ProcessedBlock]) -> None:
+    """重建 heading 的 Markdown 层级。
+
+    MinerU 的 text_level 对论文不可靠（几乎只输出 1/2）。
+    真实的层级信号在标题的编号前缀里：
+        "2"       → depth 1  (#)
+        "3.1"     → depth 2  (##)
+        "3.1.1"   → depth 3  (###)
+        "(1)"     → depth = 最近点号深度 + 1
+    无编号标题用位置/形状栈推断（固定段→#，摘要前→##，其余→#）。
+    直接覆写 block.level。
+    """
+    headings = [b for b in blocks if b.kind == "heading"]
+    if not headings:
+        return
+
+    # 先归一化空格拆字标题（"A B S T R A C T" → "Abstract"）
+    for h in headings:
+        cleaned = _clean_spaced_heading(h.content)
+        if cleaned != h.content:
+            h.content = cleaned
+
+    # 定位 Abstract/摘要，用于区分前置区与正文区
+    abstract_idx = None
+    for i, h in enumerate(headings):
+        if re.sub(r"\s+", "", h.content).lower().rstrip(":.") in ("abstract", "摘要"):
+            abstract_idx = i
+            break
+
+    last_dotted_depth = 0  # 最近一个点号编号的深度（供括号编号推断）
+    roman_active = False   # 是否处于罗马数字编号体系（"I." → "A." → "1." 嵌套）
+    seen_body_anchor = False  # 是否已过第一个正文锚点词（其后无编号非锚点标题 → 子节）
+
+    for i, h in enumerate(headings):
+        text = h.content
+        text_lower = text.lower().rstrip(":.")
+        # 空白归一化后的形式（兼容 "A B S T R A C T" 等拆字样式）
+        norm = re.sub(r"\s+", "", text_lower)
+
+        # 固定段（Abstract/摘要/References/Acknowledgments 等）→ 一级
+        if text_lower in _FIXED_SECTIONS or norm in _FIXED_SECTIONS:
+            h.level = 1
+            # methods/experimental 类固定词同时是正文锚点（其后无编号标题 → 其子节）
+            if re.sub(r"\s+", " ", text_lower).strip() in _BODY_ANCHOR_WORDS:
+                seen_body_anchor = True
+            continue
+
+        # 罗马数字编号（APS 风格 "I. INTRODUCTION"）→ 一级，开启罗马体系上下文
+        if _ROMAN_NUM_RE.match(text):
+            h.level = 1
+            roman_active = True
+            continue
+
+        # 罗马体系下的字母编号（"A. Motivation"）→ 二级
+        if roman_active and _ALPHA_NUM_RE.match(text):
+            h.level = 2
+            continue
+
+        # 点号编号前缀：深度 = 点分隔的组数；罗马体系下作为第三级起算
+        m = _DOTTED_NUM_RE.match(text)
+        if m:
+            depth = len(m.group(1).split("."))
+            h.level = min(depth + 2, 6) if roman_active else depth
+            last_dotted_depth = h.level
+            # 带编号的锚点词（"1. INTRODUCTION"）同样开启锚点上下文
+            if re.sub(r"\s+", " ", m.group(2).lower().rstrip(":.")).strip() in _BODY_ANCHOR_WORDS:
+                seen_body_anchor = True
+            continue
+
+        # 括号编号前缀：嵌套在最近点号层级之下
+        m = _PAREN_NUM_RE.match(text)
+        if m:
+            h.level = (last_dotted_depth or 1) + 1
+            continue
+
+        # 无编号标题
+        if i == 0:
+            # 首个标题 = 论文标题
+            h.level = 1
+        elif abstract_idx is not None and i < abstract_idx:
+            # 摘要前的前置区（HIGHLIGHTS / Affiliations 等）
+            h.level = 2
+        elif re.sub(r"\s+", " ", text_lower).strip() in _BODY_ANCHOR_WORDS:
+            # 正文锚点词（Introduction/Methods/Results/Discussion...）→ 顶级
+            h.level = 1
+            seen_body_anchor = True
+        elif seen_body_anchor:
+            # 锚点之后的无编号非锚点标题 → 其子节（Nature 式 Methods 小节）
+            h.level = 2
+        elif last_dotted_depth > 0:
+            # 编号章节之间的无编号标题 → 嵌在当前点号深度之下（书章子节等）
+            h.level = min(last_dotted_depth + 1, 6)
+        else:
+            # 无锚点体系论文的无编号标题 → 顶级（由 _add_numbering 补编号）
+            h.level = 1
+
+
+def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
+    """图组编号：把子图块归并到所属 Figure，生成文件名与图注。
+
+    MinerU 常把一个 Figure 拆成多个块（子图 a/b/c 各一块 + 带完整图注的一块）。
+    规律：子图块（空 caption 或单字母）在前，带 "Fig. N" 完整图注的块在后。
+    分组规则：页间隔 ≤1 的连续图片块为一组；带图编号的块结束一组并定错。
+    输出：
+        带图注的主块 → fig{N}.ext，图注 "Figure N: caption"
+        子图块       → fig{N}{letter}.ext，图注 "Figure N (letter)"
+        无编号图组   → figX{seq}.ext（如 graphical abstract）
+    N 可能带小数（章节式编号 "12.4"），文件名中小数点转连字符（fig12-4.jpg）
+    避免不同图编号截断为同一文件名互相覆盖。
+    """
+    images = [b for b in blocks if b.kind == "image"]
+    if not images:
+        return
+
+    # 检测每个块的图编号与是否为主图注块（编号为字符串，如 "3" / "12.4"）
+    def fig_num(b):
+        m = _FIG_NUM_RE.search(b.caption or "")
+        return m.group(1) if m else None
+
+    def fig_stem(num: str) -> str:
+        return "fig" + num.replace(".", "-")
+
+    # 分组：页间隔 >1 或上一块是主图注块时开新组
+    groups = []       # 每组: {"sub": [...], "main": block|None, "num": str|None}
+    cur = {"sub": [], "main": None, "num": None}
+    prev_page = None
+    for b in images:
+        if prev_page is not None and b.page_idx - prev_page > 1:
+            groups.append(cur)
+            cur = {"sub": [], "main": None, "num": None}
+        n = fig_num(b)
+        if n is not None:
+            # 主图注块：先落盘之前的子图，再结束本组
+            cur["main"] = b
+            cur["num"] = n
+            groups.append(cur)
+            cur = {"sub": [], "main": None, "num": None}
+        else:
+            cur["sub"].append(b)
+        prev_page = b.page_idx
+    if cur["sub"] or cur["main"]:
+        groups.append(cur)
+
+    # 为无编号组分配序号（figX 前缀与 fig{N} 不冲突，从 1 开始）
+    extra_seq = 0
+
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    for g in groups:
+        num = g["num"]
+        main = g["main"]
+        subs = g["sub"]
+
+        if num is None:
+            # 无编号组（如 graphical abstract）
+            extra_seq += 1
+            for j, b in enumerate(subs):
+                ext = Path(b.img_src).suffix if b.img_src else ".png"
+                suffix = letters[j] if len(subs) > 1 else ""
+                b.img_new_name = f"figX{extra_seq}{suffix}{ext}"
+                b.content = b.caption or f"Figure X{extra_seq}"
+            continue
+
+        # 子图块：字母后缀
+        for j, b in enumerate(subs):
+            ext = Path(b.img_src).suffix if b.img_src else ".png"
+            # 优先用原单字母 caption，否则按顺序 a/b/c
+            letter = b.caption.strip().lower() if (b.caption and len(b.caption.strip()) == 1 and b.caption.strip().isalpha()) else letters[j % 26]
+            b.img_new_name = f"{fig_stem(num)}{letter}{ext}"
+            b.content = f"Figure {num} ({letter})"
+
+        # 主图注块
+        if main is not None:
+            ext = Path(main.img_src).suffix if main.img_src else ".png"
+            main.img_new_name = f"{fig_stem(num)}{ext}"
+            # 图注格式："Figure N: caption"（去掉 caption 里重复的 "Fig. N" 前缀，N 可带小数）
+            cap = re.sub(r"^Fig(?:ure|\.)?\s*\d+(?:\.\d+)*\.?\s*", "", main.caption or "").strip()
+            main.content = f"Figure {num}: {cap}" if cap else f"Figure {num}"
+
+
+def _add_numbering(blocks: list[ProcessedBlock]) -> None:
+    """为无编号体系的论文正文标题补编号（1, 2, 2.1 ...）。
+
+    仅在论文整体无点号编号体系时生效；已有编号的论文保持原样。
+    正文起点：Abstract 标题之后；无 Abstract 的论文（Nature/Wiley 风格，
+    约占 2/3）则是论文标题之后第一个非固定段标题——否则会因永不触发
+    而导致全部标题压平为 H1 且无编号。
+    """
+    headings = [b for b in blocks if b.kind == "heading"]
+    if not headings:
+        return
+
+    # 如果已有编号体系，不额外加编号
+    if _has_existing_numbers(headings):
+        return
+
+    has_abstract = any(
+        re.sub(r"\s+", "", h.content).lower().rstrip(":.") in ("abstract", "摘要")
+        for h in headings
+    )
+
+    counters = {}  # level -> counter
+    body_started = False
+    seen_title = False  # 首个标题视为论文标题（无 Abstract 时用于定位正文起点）
+
+    for h in headings:
+        text_lower = h.content.lower().rstrip(":.")
+        norm = re.sub(r"\s+", "", text_lower)
+
+        if norm in ("abstract", "摘要"):
+            body_started = True
+            continue
+        # 固定段不编号
+        if text_lower in _FIXED_SECTIONS or norm in _FIXED_SECTIONS:
+            continue
+        if not body_started:
+            if has_abstract:
+                # 摘要前的前置区不编号
+                continue
+            if not seen_title:
+                # 论文标题
+                seen_title = True
+                continue
+            # 无 Abstract：标题之后第一个非固定段标题即正文起点
+            body_started = True
+        # 正文锚点词（Introduction/Methods/Results...）保持无编号（Nature 风格），
+        # 同时视为正文起点
+        if re.sub(r"\s+", " ", text_lower).strip() in _BODY_ANCHOR_WORDS:
+            body_started = True
+            continue
+        # 子节（## 及以下）不编号：它们多是锚点章节的小节（Methods 小节等）
+        if h.level >= 2:
+            continue
+        # 罗马/字母编号体系已有编号，原样保留
+        if _ROMAN_NUM_RE.match(h.content) or _ALPHA_NUM_RE.match(h.content):
+            continue
+        # 已有编号前缀的不重复加
+        if _DOTTED_NUM_RE.match(h.content) or _PAREN_NUM_RE.match(h.content):
+            _sync_counters(h.content, counters)
+            continue
+
+        level = h.level
+        number = _next_heading_number(level, counters)
+        h.content = f"{number} {h.content}"
+
+
+def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
+    """合并同页内连续的短段落碎片（MinerU 有时会把一段拆成多块）。
+
+    合并条件：连续两个 paragraph 块在同一页、前一块不以句号/冒号结尾且较短。
+    但作者署名/机构块（含 $^{ 上标或 By 开头）不与相邻段落合并，避免混入摘要。
+    """
+    if not blocks:
+        return blocks
+
+    def _is_byline(t: str) -> bool:
+        ts = t.strip()
+        return ("$^{" in ts) or re.match(r"^By\s+", ts, re.IGNORECASE) is not None
+
+    result = [blocks[0]]
+    for block in blocks[1:]:
+        prev = result[-1]
+        if (
+            block.kind == "paragraph"
+            and prev.kind == "paragraph"
+            and block.page_idx == prev.page_idx
+            and len(prev.content) < 200
+            and not prev.content.rstrip().endswith((".", ":", "!", "?", "$$"))
+            and not _is_byline(prev.content)   # 署名块不并入下文
+            and not _is_byline(block.content)  # 也不把署名块并入上文
+        ):
+            # 合并：用空格连接
+            prev.content = prev.content.rstrip() + " " + block.content.lstrip()
+        else:
+            result.append(block)
+
+    return result
+
+
+def _next_heading_number(level: int, counters: dict) -> str:
+    """生成下一个 heading 编号，如 1, 2, 2.1, 2.1.1"""
+    # 递增当前层级计数
+    counters[level] = counters.get(level, 0) + 1
+    # 重置所有更深层级
+    for k in list(counters.keys()):
+        if k > level:
+            del counters[k]
+
+    # 构建编号字符串
+    parts = []
+    for lv in sorted(counters.keys()):
+        if lv <= level:
+            parts.append(str(counters[lv]))
+    return ".".join(parts)
+
+
+def _sync_counters(text: str, counters: dict):
+    """从已有编号的标题同步计数器状态"""
+    m = re.match(r"^(\d+(?:\.\d+)*)\.?\s+", text)
+    if not m:
+        return
+    nums = [int(x) for x in m.group(1).split(".")]
+    for i, n in enumerate(nums, 1):
+        counters[i] = n
+    # 清除更深层级
+    for k in list(counters.keys()):
+        if k > len(nums):
+            del counters[k]
+
+
+def _has_existing_numbers(headings: list[ProcessedBlock]) -> bool:
+    """检查 heading 中是否已有编号体系（点号数字或罗马数字）"""
+    if not headings:
+        return False
+    numbered = sum(1 for h in headings if _DOTTED_NUM_RE.match(h.content))
+    if numbered >= max(2, len(headings) * 0.2):
+        return True
+    # 罗马数字章节（APS 风格 "I./II."）：≥2 个即视为已有编号体系
+    roman = sum(1 for h in headings if _ROMAN_NUM_RE.match(h.content))
+    return roman >= 2
+
+
+def _has_number_prefix(text: str) -> bool:
+    """检查标题是否有数字编号前缀（如 "1 ", "2.1 ", "3.2.1 "，含罗马/字母编号）"""
+    return bool(re.match(r"^\d+(\.\d+)*\.?\s+", text)
+                or _ROMAN_NUM_RE.match(text) or _ALPHA_NUM_RE.match(text))
