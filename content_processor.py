@@ -817,7 +817,10 @@ def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
     # 2. 重建 heading 层级（编号前缀解析 + 形状栈）
     _assign_heading_levels(blocks)
 
-    # 3. 图组编号（子图归并到所属 Figure）
+    # 2.5 游离编号图注处理（Blood/PNAS 式 "Figure N. ..." 以正文块存在）
+    blocks = _split_figure_legends(blocks)
+
+    # 3. 图组编号（子图归并到所属 Figure；含游离图注绑回）
     _assign_figure_numbers(blocks)
 
     # 3.5 表图（table_image）命名：table1/table2...，与 figN 不冲突
@@ -973,6 +976,48 @@ def _assign_heading_levels(blocks: list[ProcessedBlock]) -> None:
             h.level = 1
 
 
+def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
+    """游离编号图注处理：把 "Figure N. ..." 文本块标为 fig_caption_text，
+    供 _assign_figure_numbers 绑回未编号图组。
+
+    两种形态：
+    1. 整块独立图注（"Figure 7. Rapid rejection of ..."）
+    2. 句中粘连（"...(Figure 7). These data Figure 6. <图注直到块尾>"）→ 切出图注部分；
+       只处理图注延续到块尾的（块中间还有正文的无法可靠切分，放弃）
+    """
+    out = []
+    for b in blocks:
+        if b.kind != "paragraph":
+            out.append(b)
+            continue
+        t = b.content.strip()
+        # 形态 1：独立图注块
+        m = re.match(r"^Figure\s+(\d+(?:\.\d+)*)[\.\:]\s+(\S.*)$", t, re.S)
+        if m and len(m.group(2)) > 40:
+            nb = ProcessedBlock("fig_caption_text", content=m.group(2).strip(),
+                                page_idx=b.page_idx)
+            nb.fig_num = m.group(1)
+            out.append(nb)
+            continue
+        # 形态 2：句中粘连，切分点是 "Figure N. " 且其后直到块尾都是图注
+        m2 = re.search(r"\bFigure\s+(\d+(?:\.\d+)*)[\.\:]\s+([A-Z].{40,})$", t, re.S)
+        if m2:
+            prefix = t[: m2.start()].strip()
+            # 前缀以 see/as shown/in 等结尾说明 "Figure N" 是引用而非图注起点，不切
+            if prefix and not re.search(r"(see|cf\.?|as shown|shown|如|见|in)$",
+                                        prefix, re.I):
+                if prefix:
+                    out.append(ProcessedBlock("paragraph", content=prefix,
+                                              page_idx=b.page_idx))
+                nb = ProcessedBlock("fig_caption_text", content=m2.group(2).strip(),
+                                    page_idx=b.page_idx)
+                nb.fig_num = m2.group(1)
+                out.append(nb)
+                continue
+        out.append(b)
+    return out
+
+
 def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
     """图组编号：把子图块归并到所属 Figure，生成文件名与图注。
 
@@ -1053,6 +1098,56 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
             # 图注格式："Figure N: caption"（去掉 caption 里重复的 "Fig. N" 前缀，N 可带小数）
             cap = re.sub(r"^Fig(?:ure|\.)?\s*\d+(?:\.\d+)*\.?\s*", "", main.caption or "").strip()
             main.content = f"Figure {num}: {cap}" if cap else f"Figure {num}"
+
+    # --- 游离编号图注绑回（Blood/PNAS 式 "Figure N." 正文块 → 最近的未编号图组）---
+    group_of = {}
+    for g in groups:
+        for sb in g["sub"]:
+            group_of[id(sb)] = g
+        if g["main"] is not None:
+            group_of[id(g["main"])] = g
+    used = {g["num"] for g in groups if g["num"] is not None}
+    img_positions = [(idx, b) for idx, b in enumerate(blocks) if b.kind == "image"]
+
+    for idx, b in enumerate(blocks):
+        if b.kind != "fig_caption_text":
+            continue
+        n = getattr(b, "fig_num", None)
+        # 只考察图注之前最近的一个图组（不跳过一个已编号组去够更远的组）
+        target = None
+        for ipos, ib in reversed(img_positions):
+            if ipos >= idx:
+                continue
+            g = group_of.get(id(ib))
+            if g is not None and g["num"] is None:
+                target = g
+            break
+        if target is not None:
+            gpage = max(x.page_idx for x in ([target["main"]] if target["main"] else []) + target["sub"])
+            # 页距过大（图注离图组超过 1 页）不绑
+            if b.page_idx - gpage > 1:
+                target = None
+        if target is None or n is None or n in used:
+            # 绑不上：退回正文段落，并还原 "Figure N." 编号前缀
+            b.kind = "paragraph"
+            b.content = f"Figure {n}. {b.content}" if n else b.content
+            continue
+        # 组首图升为携带图注的主图
+        imgs = ([target["main"]] if target["main"] else []) + target["sub"]
+        first = imgs[0]
+        ext = Path(first.img_src).suffix if first.img_src else ".png"
+        first.img_new_name = f"fig{n}{ext}"
+        first.content = f"Figure {n}: {b.content}" if b.content else f"Figure {n}"
+        for j, sb in enumerate(imgs[1:]):
+            ext = Path(sb.img_src).suffix if sb.img_src else ".png"
+            letter = sb.caption.strip().lower() if (sb.caption and len(sb.caption.strip()) == 1 and sb.caption.strip().isalpha()) else letters[j % 26]
+            sb.img_new_name = f"fig{n}{letter}{ext}"
+            sb.content = f"Figure {n} ({letter})"
+        target["num"] = n
+        used.add(n)
+        b.kind = "_bound"
+
+    blocks[:] = [b for b in blocks if b.kind != "_bound"]
 
 
 def _add_numbering(blocks: list[ProcessedBlock]) -> None:
