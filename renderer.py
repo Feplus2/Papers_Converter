@@ -153,7 +153,7 @@ def _render_body(
             lines.append("")
         elif block.kind == "paragraph" and prev_kind in ("paragraph", "reference", "table"):
             lines.append("")
-        elif block.kind in ("image", "equation", "table") and prev_kind:
+        elif block.kind in ("image", "equation", "table", "table_image") and prev_kind:
             lines.append("")
 
         if block.kind == "page_anchor":
@@ -168,7 +168,7 @@ def _render_body(
             text = block.content.replace("\n", " ").strip()
             lines.append(text)
 
-        elif block.kind == "image":
+        elif block.kind == "image" or block.kind == "table_image":
             # 复制图片
             if images_source_dir and block.img_src:
                 src_path = images_source_dir / Path(block.img_src).name
@@ -181,7 +181,8 @@ def _render_body(
                 else:
                     logger.warning(f"  图片未找到: {block.img_src}")
 
-            # Markdown 图片语法（content 已由 _assign_figure_numbers 格式化为 "Figure N: caption"）
+            # Markdown 图片语法（image 的 content 已由 _assign_figure_numbers
+            # 格式化为 "Figure N: caption"；table_image 保留原表注）
             caption = block.content or block.caption or "Figure"
             lines.append(f"![{caption}](images/{block.img_new_name})")
 

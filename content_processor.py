@@ -92,6 +92,9 @@ _PUB_NOISE_RES = [
     re.compile(r"^(Received|Accepted|Revised|Published|Final version)\s*[:,]?\s*(\d|January|February|March|April|May|June|July|August|September|October|November|December|online|in revised|for publication)", re.I),
     re.compile(r"^(RECEIVED|ACCEPTED|PUBLISHED)\b", re.I),
     re.compile(r"^Received in revised", re.I),
+    re.compile(r"^(Published|Downloaded) on\b", re.I),   # RSC 页脚残留（无前缀可剥时整块丢弃）
+    # 独立的续表标记行（"Table 1 (Contd.)"），表已在别处，标记本身是噪声
+    re.compile(r"^Table\s+\d+[^()]*\((contd\.?|continued|cont\.?|cont'd)\)\s*$", re.I),
 ]
 
 # 文章类型标签（整块仅是一个标签词）
@@ -114,6 +117,10 @@ def _clean_paragraph(text: str):
     t = text.strip()
     if not t:
         return None
+
+    # 剥离 RSC 页脚前缀（"Published on 17 May 2010. Downloaded on 29/07/2013 19:30:29. "），
+    # 保留粘连的正文（如表注 "Table 1 Selection of ..."）；剥完为空则下面按纯噪声丢弃
+    t = re.sub(r"^(?:(?:Published|Downloaded) on\s+[^.]*\.\s*)+", "", t)
 
     # 纯噪声模式
     for pat in _PUB_NOISE_RES:
@@ -189,6 +196,10 @@ def process_content(content_list: list[dict], images_dir: str = "",
         if block["type"] == "page_footnote":
             continue
         filtered.append(block)
+
+    # Step 2.5: 跨页表格合并（借鉴 MinerU-Popo table_merge_filter 的规则集：
+    # 候选配对/caption 一致性/列数兼容/表头去重，纯规则、保守拒绝）
+    filtered = _merge_cross_page_tables(filtered)
 
     # Step 3: 构建 IR
     blocks = _build_ir(filtered, images_dir)
@@ -480,6 +491,12 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             # 但先拆分 MinerU 把正文/标题合并进表格的版面缺陷单元格
             body = (block.get("table_body") or "").strip()
             caption = _extract_table_caption(block)
+            if not caption or _is_junk_caption(caption):
+                # caption 缺失/是垃圾时，尝试绑定紧邻前驱的 "Table N" 段落为表注
+                # （RSC 版式：表注常被页脚噪声粘连成独立文本块）
+                if result and result[-1].kind == "paragraph" \
+                        and re.match(r"^Table\s+\d", result[-1].content):
+                    caption = result.pop().content
             if body:
                 body, rescued = _rescue_prose_cells(body, page_idx)
                 if body:
@@ -488,11 +505,13 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                     ))
                 result.extend(rescued)
             elif block.get("img_path"):
-                # 无 HTML 表体时退化为图片，避免整表静默丢失
+                # 无 HTML 表体时退化为图片（table_image 类型，不进图组编号、
+                # 保留表注，避免被误编成 "Figure N"）
+                cap = caption if not _is_junk_caption(caption) else ""
                 result.append(ProcessedBlock(
-                    "image",
-                    content=caption or "Table",
-                    caption=caption,
+                    "table_image",
+                    content=cap or "Table",
+                    caption=cap,
                     img_src=block["img_path"],
                     page_idx=page_idx,
                 ))
@@ -572,9 +591,150 @@ def _extract_caption(block: dict) -> str:
 
 
 def _extract_table_caption(block: dict) -> str:
-    """从表格块提取 caption（table_caption 列表合并）"""
+    """从表格块提取 caption（table_caption 列表合并；剥离页脚噪声前缀与续表标记）"""
     captions = block.get("table_caption") or []
-    return " ".join(c.strip() for c in captions if c.strip())
+    parts = []
+    for c in captions:
+        # 剥离 RSC 页脚前缀（"Published on ... Downloaded on ..."）
+        c = re.sub(r"^(?:(?:Published|Downloaded) on\s+[^.]*\.\s*)+", "", c.strip())
+        # 去续表标记（"Table 1 (Contd.)" → "Table 1"）
+        c = _TABLE_CONT_RE.sub("", c).strip()
+        if c and not _is_junk_caption(c):
+            parts.append(c)
+    return " ".join(parts)
+
+
+# ============================================================
+# 跨页表格合并（规则框架借鉴 MinerU-Popo 的 table_merge_filter /
+# table_merge_utils，按我们 content_list 结构适配；不引入模型）
+# ============================================================
+
+# 续表标记（caption 含这些即判为续表）
+_TABLE_CONT_RE = re.compile(
+    r"\(?\s*(continued|contd\.?|cont\.?|cont'd|续表|续上表|接续)\s*\)?\s*$", re.I)
+
+# 垃圾 caption（页眉页脚被误当表注）：按无 caption 处理
+_TABLE_JUNK_CAPTION_RES = [
+    re.compile(r"^(published|downloaded|received|accepted)\b", re.I),
+    re.compile(r"^https?://", re.I),
+    re.compile(r"^view (article|this)", re.I),
+    re.compile(r"^doi\b", re.I),
+]
+
+
+def _table_rows_html(html_str: str) -> list:
+    return re.findall(r"<tr[^>]*>.*?</tr>", html_str, re.S | re.I)
+
+
+def _row_cells_text(row_html: str) -> list:
+    """一行的单元格 [(归一化文本, colspan)]，用于表头去重比对"""
+    cells = []
+    for cell in re.findall(r"<t[dh][^>]*>.*?</t[dh]>", row_html, re.S | re.I):
+        text = unescape(re.sub(r"<[^>]+>", "", cell))
+        text = re.sub(r"\s+", "", text).lower()
+        m = re.search(r'colspan="(\d+)"', cell[: cell.index(">")])
+        cells.append((text, int(m.group(1)) if m else 1))
+    return cells
+
+
+def _table_col_count(html_str: str) -> int:
+    """表格总列数（colspan 感知，取各行最大值）"""
+    best = 0
+    for row in _table_rows_html(html_str):
+        best = max(best, sum(cs for _, cs in _row_cells_text(row)))
+    return best
+
+
+def _table_num(caption: str) -> str | None:
+    m = re.search(r"\b(?:table|tab\.?|exhibit|表)\s*[.:]?\s*(\d+(?:\.\d+)*)",
+                  caption, re.I)
+    return m.group(1) if m else None
+
+
+def _is_junk_caption(cap: str) -> bool:
+    return len(cap) > 200 or any(p.search(cap) for p in _TABLE_JUNK_CAPTION_RES)
+
+
+def _can_merge_tables(t1: dict, t2: dict) -> bool:
+    """判断相邻两页边界的两个表格是否同一逻辑表（保守：拿不准就拒）"""
+    cap1 = _extract_table_caption(t1)
+    cap2 = _extract_table_caption(t2)
+    if _is_junk_caption(cap1):
+        cap1 = ""
+    if _is_junk_caption(cap2):
+        cap2 = ""
+
+    if cap2:
+        if not _TABLE_CONT_RE.search(cap2):
+            # 无续表标记：要求编号一致（跨页重复表头/caption 的续表）
+            n1, n2 = _table_num(cap1), _table_num(cap2)
+            if n1 is None or n2 is None or n1 != n2:
+                return False
+    # 列数兼容（Popo 判据之一；不等即拒绝，不尝试对齐）
+    c1 = _table_col_count(t1.get("table_body") or "")
+    c2 = _table_col_count(t2.get("table_body") or "")
+    if c1 and c2 and c1 != c2:
+        return False
+    return True
+
+
+def _exec_table_merge(t1: dict, t2: dict) -> None:
+    """把 t2 的行并入 t1（重复表头行去重；caption 保留 t1 的）"""
+    body1 = t1.get("table_body") or ""
+    body2 = t2.get("table_body") or ""
+    rows1 = _table_rows_html(body1)
+    rows2 = _table_rows_html(body2)
+
+    # 表头去重：t2 首行与 t1 首行同构则丢弃（最多查 3 行）
+    if rows1:
+        h1 = _row_cells_text(rows1[0])
+        dropped = 0
+        while rows2 and dropped < 3 and _row_cells_text(rows2[0]) == h1:
+            rows2.pop(0)
+            dropped += 1
+
+    merged = re.sub(r"</table>\s*$", "", body1, flags=re.I) + "".join(rows2) + "</table>"
+    t1["table_body"] = merged
+    if t2.get("table_footnote"):
+        t1["table_footnote"] = (t1.get("table_footnote") or []) + t2["table_footnote"]
+
+
+def _merge_cross_page_tables(blocks: list[dict]) -> list[dict]:
+    """合并跨页续表：块序上相邻的两个表格，跨页且中间无正文块则尝试合并。
+
+    候选只看"下一个有表体的表格"（中间隔着无表体的图片页不阻断），
+    链式续表（跨 3+ 页）反复合并直到无候选。
+    """
+    def _is_table(b):
+        return b.get("type") == "table" and (b.get("table_body") or "").strip()
+
+    def _has_text_between(i1, i2):
+        # 中间的正文块会阻断合并；出版噪声块（会被 _clean_paragraph 丢弃的）不算
+        for b in blocks[i1 + 1:i2]:
+            if b.get("type") in ("text", "list", "ref_text"):
+                t = (b.get("text") or "").strip()
+                if t and _clean_paragraph(t) is not None:
+                    return True
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        tidx = [i for i, b in enumerate(blocks) if _is_table(b)]
+        for i1, i2 in zip(tidx, tidx[1:]):
+            t1, t2 = blocks[i1], blocks[i2]
+            # 同页相邻的是两张表，不合；必须跨页
+            if t2.get("page_idx", 0) <= t1.get("page_idx", 0):
+                continue
+            if _has_text_between(i1, i2):
+                continue
+            if _can_merge_tables(t1, t2):
+                _exec_table_merge(t1, t2)
+                blocks[i2]["type"] = "_merged"
+                changed = True
+                break  # 重扫（链式）
+
+    return [b for b in blocks if b.get("type") != "_merged"]
 
 
 # 表格内正文单元格判据：≥200 字符且含英文句子结构（正常数据表单元格不会命中）
@@ -629,6 +789,11 @@ def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
 
     # 3. 图组编号（子图归并到所属 Figure）
     _assign_figure_numbers(blocks)
+
+    # 3.5 表图（table_image）命名：table1/table2...，与 figN 不冲突
+    for i, b in enumerate((b for b in blocks if b.kind == "table_image"), 1):
+        ext = Path(b.img_src).suffix if b.img_src else ".png"
+        b.img_new_name = f"table{i}{ext}"
 
     # 4. 为无编号体系的论文补编号
     _add_numbering(blocks)
@@ -926,10 +1091,13 @@ def _add_numbering(blocks: list[ProcessedBlock]) -> None:
 
 
 def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
-    """合并同页内连续的短段落碎片（MinerU 有时会把一段拆成多块）。
+    """合并被拆开的段落碎片（MinerU 常把一段拆成多块，或跨页断开）。
 
-    合并条件：连续两个 paragraph 块在同一页、前一块不以句号/冒号结尾且较短。
-    但作者署名/机构块（含 $^{ 上标或 By 开头）不与相邻段落合并，避免混入摘要。
+    合并闸门（规则框架借鉴 MinerU-Popo 的 merge_rules/is_list_item）：
+    前块不以终止符结尾且较短；终止符含 CJK 与"终止符+闭引号/括号"组合；
+    后块是列表项开头、或两块都以数字开头 → 不合并；
+    允许跨页合并，但要求续段信号（后块小写/开括号起首，或前块逗号/连字符结尾）；
+    作者署名/机构块（含 $^{ 上标或 By 开头）不与相邻段落合并。
     """
     if not blocks:
         return blocks
@@ -938,22 +1106,51 @@ def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBl
         ts = t.strip()
         return ("$^{" in ts) or re.match(r"^By\s+", ts, re.IGNORECASE) is not None
 
-    result = [blocks[0]]
-    for block in blocks[1:]:
-        prev = result[-1]
-        if (
-            block.kind == "paragraph"
-            and prev.kind == "paragraph"
-            and block.page_idx == prev.page_idx
-            and len(prev.content) < 200
-            and not prev.content.rstrip().endswith((".", ":", "!", "?", "$$"))
-            and not _is_byline(prev.content)   # 署名块不并入下文
-            and not _is_byline(block.content)  # 也不把署名块并入上文
-        ):
-            # 合并：用空格连接
-            prev.content = prev.content.rstrip() + " " + block.content.lstrip()
-        else:
+    def _ends_terminal(t: str) -> bool:
+        t = t.rstrip()
+        if not t or t.endswith("$$"):
+            return True
+        if t[-1] in ".。?!？！:：;；…":
+            return True
+        # 终止符 + 闭引号/括号（"...said." / （…完成。）
+        return len(t) >= 2 and t[-1] in "”’\"')）】」》" and t[-2] in ".。?!？！:：;；…"
+
+    _LIST_ITEM_RE = re.compile(
+        r"^\s*(?:\d{1,2}[.)]\s|[（(]\d{1,2}[）)]|[（(][a-zA-Z][）)]|[•▪▫●○◦]|\\?-\s"
+        r"|[①-⑳]|第[0-9一二三四五六七八九十百]+[条节章节]|[A-Z]\.\s|[IVXLC]{1,4}\.\s)")
+
+    def _cross_page_ok(prev_t: str, next_t: str) -> bool:
+        """跨页续段信号：后块小写/开括号起首，或前块逗号/连字符结尾"""
+        if re.match(r"^[a-z(]", next_t):
+            return True
+        return prev_t.rstrip().endswith((",", "，", "、", "-", "–", "—"))
+
+    result: list[ProcessedBlock] = []
+    last_para_idx: int | None = None
+    for block in blocks:
+        if block.kind == "paragraph":
+            if last_para_idx is not None:
+                prev = result[last_para_idx]
+                same_page = block.page_idx == prev.page_idx
+                cross_page = block.page_idx == prev.page_idx + 1
+                if (
+                    (same_page or (cross_page and _cross_page_ok(prev.content, block.content)))
+                    and len(prev.content) < 200
+                    and not _ends_terminal(prev.content)
+                    and not _LIST_ITEM_RE.match(block.content)
+                    and not (prev.content[:1].isdigit() and block.content[:1].isdigit())
+                    and not _is_byline(prev.content)   # 署名块不并入下文
+                    and not _is_byline(block.content)  # 也不把署名块并入上文
+                ):
+                    # 合并：用空格连接
+                    prev.content = prev.content.rstrip() + " " + block.content.lstrip()
+                    continue
             result.append(block)
+            last_para_idx = len(result) - 1
+            continue
+        result.append(block)
+        if block.kind != "page_anchor":
+            last_para_idx = None
 
     return result
 
