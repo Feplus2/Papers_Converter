@@ -13,12 +13,64 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+# PaddleOCR-VL 下标小数/分数断裂修复：
+# 上游把十进制点/分数线切断在数学区外（"$Li_{0$.75}" / "$Li_{1$/3}$"），
+# 产生 { 未闭合的 span（pandoc/texmath "unexpected eof"，KaTeX 必挂；全量实测
+# 1001 处，是契约"公式 KaTeX 渲染无报错"唯一大面积不达项）。
+# "{0$.75}" → "{0.75}"，"{1$/3}" → "{1/3}"；左侧兼容变量/符号（"{x$.5}"、
+# "{3+$/4+}" 价态、"{0$.5-$x}" 区间），分隔符兼容欧式逗号小数（"{0$,78}"）。
+_BROKEN_SCRIPT_PAREN_RE = re.compile(r"\{([\w()+-]*)\$\)\$\}")  # "{(1-x$)$}" → "{(1-x)}"
+_BROKEN_SCRIPT_PAREN2_RE = re.compile(r"\{([\w()+-]*)\$(\))")  # "{(O-Na-O$)}" → "{(O-Na-O)}"
+_BROKEN_SCRIPT_PRIME_RE = re.compile(r"\{(\w*)\$(')")  # "$O_{2$'}$" → "$O_{2'}$"
+_BROKEN_SCRIPT_FRAC_RE = re.compile(r"\{([\w()+-]*)\$([.,/\\-])([\w$().+-]*)\}")
+_BROKEN_SCRIPT_CMD_RE = re.compile(r"\{([\w()+-]*)\$(\\[a-zA-Z]+[\w().+-]*)\}")  # "{3+$\delta}" → "{3+\delta}"
+_BROKEN_SCRIPT_CLOSE_RE = re.compile(r"\{([\w()+-]*)\$(\})")  # "$g^{-1$}$" → "$g^{-1}$"
+_BROKEN_SCRIPT_SLASH_RE = re.compile(r"_\{(\w+)\}/(\w+)\}")  # "$Na_{2}/3}$" → "$Na_{2/3}$"
+_BROKEN_RBRACE_SUP_RE = re.compile(r"\$(\w+)\}\^")  # "$Na}^+$" → "$Na^+$"（} 越位）
+# 伪公式包裹污染 \mathrm（stage1 把 \mathrm 内容再包 $...$）："\mathrm{$Na}" → "\mathrm{Na}"
+# （$ 漏进数学区会让 pandoc 重新切 span 并吃掉 \mathrm{ 导致 eof）
+_MATHRM_WRAP_UNWRAP_RE = re.compile(r"\\mathrm\{\$([A-Za-z0-9]+)\}")
+
+
+def _frac_merge(m: re.Match) -> str:
+    # 右侧可能还嵌着第二个 $（变量被单独切出，如 "{0$.5-$x}"）——一并去掉
+    return "{" + m.group(1) + m.group(2) + m.group(3).replace("$", "") + "}"
+
+
+def _repair_script_frac(text: str) -> str:
+    text = _BROKEN_SCRIPT_PAREN_RE.sub(r"{\1)}", text)
+    text = _BROKEN_SCRIPT_PAREN2_RE.sub(r"{\1\2", text)
+    text = _BROKEN_SCRIPT_PRIME_RE.sub(r"{\1\2", text)
+    text = _BROKEN_SCRIPT_FRAC_RE.sub(_frac_merge, text)
+    text = _BROKEN_SCRIPT_CMD_RE.sub(r"{\1\2}", text)
+    text = _BROKEN_SCRIPT_CLOSE_RE.sub(r"{\1\2", text)
+    text = _BROKEN_SCRIPT_SLASH_RE.sub(r"_{\1/\2}", text)
+    text = _BROKEN_RBRACE_SUP_RE.sub(r"$\1^", text)
+    return _MATHRM_WRAP_UNWRAP_RE.sub(r"\\mathrm{\1}", text)
+
+
+# 引文上标化（"$^{[1-7]}" / "$^{[12]}" / "$^{[13b]}$"）回改契约形式（"[1-7]" 等）；
+# 兼容收尾空格（"$^{[42]} $"）与 GB/T 文献类型标记（"$^{[J]}$" 单大写字母）；
+# 小写字母 [a]/[b] 是作者单位脚注标记，不归一
+_CITATION_SUP_RE = re.compile(r"\$\^\{\[((?:\d[\w,;\s–—-]*|[A-Z]))\]\}\s*\$")
+# 无收尾 $ 的引文上标（"$...}$^{[52]}" —— $ 是前一个数学区的收尾，^{[n]} 是裸上标）：
+# 仅归一 ^{[n]} 部分，前导 $ 必须保留（否则前区失去闭合）
+_CITATION_SUP_DANGLING_RE = re.compile(r"(?<=\$)\^\{\[((?:\d[\w,;\s–—-]*|[A-Z]))\]\}(?!\s*\$)")
+
+
+def _normalize_citation_sup(text: str) -> str:
+    text = _CITATION_SUP_RE.sub(r"[\1]", text)
+    return _CITATION_SUP_DANGLING_RE.sub(r"[\1]", text)
+
+
 def _normalize_inline(text: str) -> str:
     r"""归一化 MinerU 文本中的内联 HTML 与特殊空白。
 
     现行 VLM 输出在正文里夹带 <sup>/<sub> HTML 标签与   不换行空格
     （旧产物是 $^{}$ LaTeX 形式），统一转为 LaTeX 上/下标，避免标签漏进 paper.md。
+    附带：断裂上下标修复（_repair_script_frac）与引文格式归一（$^{[n]}$ → [n]）。
     """
+    text = _repair_script_frac(text)
     if "<" in text:
         text = re.sub(r"<sup>\s*</sup>", "", text)
         text = re.sub(r"<sub>\s*</sub>", "", text)
@@ -28,6 +80,10 @@ def _normalize_inline(text: str) -> str:
         text = re.sub(r"<sub>(.*?)</sub>", r"$_{\1}$", text, flags=re.S)
         # 样式标签（<i>/<em>/<b>/<u>/<span>）只去标签留内容（Zotero 标题常带 <i>via</i>）
         text = re.sub(r"</?(?:i|em|b|u|span)(?:\s[^>]*)?>", "", text)
+    # MinerU 引文上标化（"$^{[1-7]}" / "$^{[12]}"）回改契约形式（"[1-7]" / "[12]"）；
+    # 含上一条 <sup>[n]</sup> → "$^{[n]}$" 的转换结果，两条路径殊途同归；
+    # 兼容子标签引文（"$^{[13b]}$"）、收尾空格（"$^{[42]} $"）与 GB/T 标记（"$^{[J]}$"）
+    text = _normalize_citation_sup(text)
     if "\xa0" in text:
         text = text.replace("\xa0", " ")
     return text
@@ -506,6 +562,9 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             # 契约约定复杂表格直接用 HTML <table>，原样透传；
             # 但先拆分 MinerU 把正文/标题合并进表格的版面缺陷单元格
             body = (block.get("table_body") or "").strip()
+            if body:
+                # 表体内同样可能有断裂上下标与上标化引文（HTML 表格不经 _normalize_inline）
+                body = _normalize_citation_sup(_repair_script_frac(body))
             caption = _extract_table_caption(block)
             if not caption or _is_junk_caption(caption):
                 # caption 缺失/是垃圾时，尝试绑定紧邻前驱的 "Table N" 段落为表注
@@ -592,7 +651,33 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             else:
                 result.append(ProcessedBlock("paragraph", content=text))
 
+    _ensure_references_heading(result)
     return result
+
+
+def _ensure_references_heading(blocks: list[ProcessedBlock]) -> None:
+    """参考文献区无标题时补一级 heading（约 1/4 论文的引擎产物缺该标题——
+    裸列的参考文献会被 SageRead 按 heading 切片时并入前一章节，且契约要求
+    无编号固定段有对应层级 #）。已有参考文献标题则不动；
+    "References" 被当成正文段落在前的，升级为标题而非重复插入。
+    """
+    first_ref = next((i for i, b in enumerate(blocks) if b.kind == "reference"), None)
+    if first_ref is None:
+        return
+    for b in blocks[:first_ref]:
+        if b.kind == "heading" and _is_reference_heading(b.content):
+            return
+    # 紧邻前驱（跳过页码锚点）是 "References" 类段落 → 升级为标题
+    j = first_ref - 1
+    while j >= 0 and blocks[j].kind == "page_anchor":
+        j -= 1
+    if j >= 0 and blocks[j].kind == "paragraph" and _is_reference_heading(blocks[j].content):
+        blocks[j].kind = "heading"
+        if blocks[j].content.isupper():
+            blocks[j].content = blocks[j].content.title()  # "REFERENCES" → "References"
+        return
+    # 否则在第一条参考文献前插入合成标题（页码锚点之后，保住锚点与页的相对位置）
+    blocks.insert(first_ref, ProcessedBlock("heading", content="References"))
 
 
 def _is_reference_heading(text: str) -> bool:
