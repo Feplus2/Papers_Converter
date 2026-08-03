@@ -44,8 +44,11 @@ DEEPSEEK_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-chat")
 
 # ============================================================
-# MinerU 云解析（PDF → 结构化产物）
+# Stage 1 解析引擎（PDF → 结构化产物，契约见 ocr_provider.py）
 # ============================================================
+OCR_PROVIDER = _env("OCR_PROVIDER", "paddleocr")  # 可选值见 ocr_provider.provider_names()
+
+# MinerU 云解析
 MINERU_TOKEN = _env("MINERU_TOKEN")
 MINERU_MODEL = _env("MINERU_MODEL", "vlm")
 MINERU_LANGUAGE = _env("MINERU_LANGUAGE", "")   # 空=自动；可填 ch/en 等
@@ -56,6 +59,20 @@ MINERU_ENABLE_TABLE = _env_bool("MINERU_ENABLE_TABLE", True)
 MINERU_CHUNK_SIZE = int(_env("MINERU_CHUNK_SIZE", "200"))
 # 论文页数上限：论文几乎不可能超过 200 页，超过即判定为书籍，拒收并提示改走图书馆导入
 MAX_PAPER_PAGES = int(_env("MAX_PAPER_PAGES", "200"))
+
+# GLM-OCR（智谱 layout_parsing API）
+GLM_OCR_API_KEY = _env("GLM_OCR_API_KEY")
+GLM_OCR_BASE_URL = _env("GLM_OCR_BASE_URL", "https://open.bigmodel.cn")
+GLM_OCR_TIMEOUT = int(_env("GLM_OCR_TIMEOUT", "600"))
+# 单次请求页数上限（API 限制 100 页，留余量）
+GLM_OCR_CHUNK_SIZE = int(_env("GLM_OCR_CHUNK_SIZE", "100"))
+
+# PaddleOCR-VL（百度 AI Studio 异步 job API）
+PADDLEOCR_API_URL = _env("PADDLEOCR_API_URL",
+                         "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs")
+PADDLEOCR_TOKEN = _env("PADDLEOCR_TOKEN")
+PADDLEOCR_MODEL = _env("PADDLEOCR_MODEL", "PaddleOCR-VL-1.6")
+PADDLEOCR_TIMEOUT = int(_env("PADDLEOCR_TIMEOUT", "900"))
 
 # ============================================================
 # 路径

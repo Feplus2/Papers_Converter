@@ -3,8 +3,9 @@ r"""
 Papers_Converter — 论文 PDF → Pandoc Markdown 转换管线（通用，不依赖 Zotero）
 
 用法:
-    python pipeline.py <paper.pdf>               # 完整管线：PDF→MinerU解析→MD
+    python pipeline.py <paper.pdf>               # 完整管线：PDF→引擎解析→MD
     python pipeline.py <paper.pdf> --no-ocr      # 文字版 PDF（不强制 OCR）
+    python pipeline.py <paper.pdf> --model pipeline  # MinerU 换 pipeline 后端（A/B）
     python pipeline.py <parsed_dir>              # 仅转换已解析产物目录
     python pipeline.py <parsed_key>              # 仅转换（Zotero key，示例数据源）
     python pipeline.py --all                     # 批量转换 parsed/ 下全部论文
@@ -155,12 +156,18 @@ def convert_pdf(
     use_llm: bool = True,
     ocr: bool = True,
     skip_mineru: bool = False,
+    provider_name: str | None = None,
+    provider_opts: dict | None = None,
+    zotero_key: str | None = None,
 ) -> Path | None:
-    """完整管线：PDF → MinerU 云解析 → Pandoc Markdown。
+    """完整管线：PDF → 解析引擎 → Pandoc Markdown。
 
     解析产物落在 output_dir/_staging/{stem}/，重跑时可 --skip-mineru 复用。
+    provider_name 为空时用 config.OCR_PROVIDER；provider_opts 传给引擎
+    （如 MinerU 的 {"model": "pipeline"} 做后端 A/B）。
+    zotero_key：批量重解析时传入，元数据走 Zotero 权威并写入 frontmatter。
     """
-    from stage1_mineru import run_mineru, _count_pages
+    from ocr_provider import count_pages, get_provider
 
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -169,7 +176,7 @@ def convert_pdf(
 
     # 整书守卫：论文几乎不可能超过 200 页，超过即更像一本书，
     # 拒收并引导用户改走图书馆导入（books_converter 路径）
-    total_pages = _count_pages(str(pdf_path))
+    total_pages = count_pages(str(pdf_path))
     if total_pages > config.MAX_PAPER_PAGES:
         logger.error(
             f"  该 PDF 共 {total_pages} 页（>{config.MAX_PAPER_PAGES}），"
@@ -178,21 +185,26 @@ def convert_pdf(
         )
         return None
 
-    staging_dir = output_dir / "_staging" / pdf_path.stem
+    provider = get_provider(provider_name)
+    # staging 以 stem+内容哈希命名：不同论文都可能叫 source.pdf，仅按 stem 会碰撞
+    import hashlib
+    digest = hashlib.md5(pdf_path.read_bytes()).hexdigest()[:6]
+    staging_dir = output_dir / "_staging" / f"{pdf_path.stem}-{digest}"
 
-    # Stage 1: MinerU 解析（可跳过复用已有产物）
+    # Stage 1: 引擎解析（可跳过复用已有产物）
     need_parse = not skip_mineru or not list(staging_dir.glob("*_content_list.json"))
     if need_parse:
-        logger.info(f"\n=== Stage 1: MinerU 解析 {pdf_path.name} ===")
-        run_mineru(str(pdf_path), str(staging_dir), ocr=ocr,
-                   progress=lambda detail, frac=None: logger.info(f"  {detail}"))
+        logger.info(f"\n=== Stage 1: {provider.name} 解析 {pdf_path.name} ===")
+        provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
+                       progress=lambda detail, frac=None: logger.info(f"  {detail}"),
+                       **(provider_opts or {}))
     else:
-        logger.info(f"  跳过 MinerU，复用已有解析: {staging_dir}")
+        logger.info(f"  跳过解析，复用已有产物: {staging_dir}")
 
-    # Stage 2/3: 转换（非 Zotero 来源，不写 zotero_key）
+    # Stage 2/3: 转换
     return convert_single(
         staging_dir, output_dir, use_llm=use_llm,
-        source_pdf=pdf_path, zotero_key=None,
+        source_pdf=pdf_path, zotero_key=zotero_key,
     )
 
 
@@ -202,7 +214,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python pipeline.py D:\\papers\\some_paper.pdf    # 完整管线 PDF→MinerU→MD
+  python pipeline.py D:\\papers\\some_paper.pdf    # 完整管线 PDF→引擎解析→MD
   python pipeline.py paper.pdf --no-ocr           # 文字版 PDF
   python pipeline.py 26NNZJHX                     # 单篇（Zotero key，示例源）
   python pipeline.py F:\\path\\to\\parsed\\KEY      # 单篇（已解析目录）
@@ -238,7 +250,22 @@ def main():
     parser.add_argument(
         "--skip-mineru",
         action="store_true",
-        help="PDF 模式下复用已有解析产物，不重新提交 MinerU",
+        help="PDF 模式下复用已有解析产物，不重新提交解析（任意 provider 均适用）",
+    )
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="Stage 1 解析引擎（默认取 .env 的 OCR_PROVIDER，当前内置: mineru）",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="传给解析引擎的后端/模型名（如 MinerU 的 vlm / pipeline，用于后端 A/B）",
+    )
+    parser.add_argument(
+        "--reparse",
+        action="store_true",
+        help="批量模式下不用缓存产物，用 --provider 指定的引擎重新解析每篇 PDF",
     )
     parser.add_argument(
         "--limit",
@@ -279,8 +306,20 @@ def main():
         for i, d in enumerate(dirs, 1):
             logger.info(f"\n[{i}/{len(dirs)}] {d.name}")
             try:
-                result = convert_single(d, output_dir, use_llm=use_llm,
-                                        zotero_key=d.name)
+                if args.reparse:
+                    pdfs = list(d.glob("*.pdf"))
+                    if not pdfs:
+                        logger.error("  未找到 PDF，跳过")
+                        failed += 1
+                        continue
+                    result = convert_pdf(pdfs[0], output_dir, use_llm=use_llm,
+                                         ocr=not args.no_ocr,
+                                         skip_mineru=args.skip_mineru,
+                                         provider_name=args.provider,
+                                         zotero_key=d.name)
+                else:
+                    result = convert_single(d, output_dir, use_llm=use_llm,
+                                            zotero_key=d.name)
                 if result:
                     success += 1
                 else:
@@ -288,6 +327,10 @@ def main():
             except Exception as e:
                 logger.error(f"  转换失败: {e}")
                 failed += 1
+                # 配额熔断：日配额/限流错误继续跑只会全军覆没
+                if any(k in str(e) for k in ("12001", "429", "配额")):
+                    logger.error("  检测到配额/限流错误，中止批量（明日配额重置后再续）")
+                    break
 
         elapsed = time.time() - total_start
         logger.info("\n" + "=" * 60)
@@ -298,10 +341,13 @@ def main():
         target = args.target
         target_path = Path(target)
 
-        # 情况 1：PDF 文件 → 完整管线（PDF→MinerU→MD）
+        # 情况 1：PDF 文件 → 完整管线（PDF→解析引擎→MD）
         if target_path.suffix.lower() == ".pdf" or target_path.is_file():
+            provider_opts = {"model": args.model} if args.model else None
             result = convert_pdf(target_path, output_dir, use_llm=use_llm,
-                                 ocr=not args.no_ocr, skip_mineru=args.skip_mineru)
+                                 ocr=not args.no_ocr, skip_mineru=args.skip_mineru,
+                                 provider_name=args.provider,
+                                 provider_opts=provider_opts)
         # 情况 2：已解析目录
         elif target_path.is_dir():
             result = convert_single(target_path, output_dir, use_llm=use_llm)

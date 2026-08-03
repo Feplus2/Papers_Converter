@@ -206,6 +206,15 @@ def _rule_extract(early_blocks: list[dict], full_list: list[dict]) -> dict:
             break
 
     # --- Date/Year ---
+    # 启发式 fallback 的年份合理性窗口：防止从 DOI（如 10.1149/2.0611916jes
+    # 里的学会创立年 1916）或历史引文误提；显式日期行（received/accepted）不受限
+    from datetime import date as _date_cls
+    _max_year = _date_cls.today().year + 1
+
+    def _plausible_years(text: str) -> list:
+        return [y for y in re.findall(r"\b((?:19|20)\d{2})\b", text)
+                if 1950 <= int(y) <= _max_year]
+
     # 先从 early_blocks 中找显式日期
     for block in early_blocks:
         text = block.get("text", "")
@@ -219,7 +228,7 @@ def _rule_extract(early_blocks: list[dict], full_list: list[dict]) -> dict:
             text = block.get("text", "")
             # 从 citation 或封面信息中找
             if any(kw in text.lower() for kw in ("citation", "publication date", "published in", "©")):
-                year_matches = re.findall(r"\b((?:19|20)\d{2})\b", text)
+                year_matches = _plausible_years(text)
                 if year_matches:
                     meta["date"] = year_matches[-1]
                     break
@@ -227,7 +236,7 @@ def _rule_extract(early_blocks: list[dict], full_list: list[dict]) -> dict:
     if "date" not in meta:
         for block in full_list[:30]:
             if block["type"] == "footer":
-                year_matches = re.findall(r"\b((?:19|20)\d{2})\b", block.get("text", ""))
+                year_matches = _plausible_years(block.get("text", ""))
                 if year_matches:
                     meta["date"] = year_matches[-1]
                     break

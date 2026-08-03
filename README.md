@@ -2,8 +2,9 @@
 
 论文 PDF → Pandoc Markdown 转换管线（SageRead 论文模块的上游 sidecar，与 books_converter 同级）。
 
-输入：PDF（经 MinerU 云解析）或已解析产物（`content_list.json`）。
+输入：PDF（经可插拔解析引擎，默认 PaddleOCR-VL；三方对比见 `docs/ocr-providers.md`）或已解析产物（`content_list.json`）。
 输出：`{slug}/paper.md + images/ + source.pdf`，格式契约见 SageRead `docs/paper-format-contract.md`。
+多引擎调研与路线图见 `docs/ocr-providers.md`。
 
 ## 快速开始
 
@@ -26,7 +27,9 @@ python -m venv .venv
 # 常用开关
 #   --no-llm        纯规则（Zotero 元数据齐备时基本够用）
 #   --no-ocr        文字版 PDF，不强制 OCR
-#   --skip-mineru   复用 _staging 的解析产物，不重新提交 MinerU
+#   --skip-mineru   复用 _staging 的解析产物，不重新提交解析
+#   --provider X    指定 Stage 1 解析引擎（当前内置: mineru, glm, paddleocr）
+#   --model X       引擎后端 A/B（如 MinerU 的 vlm / pipeline）
 #   -o DIR          输出目录（默认 ./output）
 ```
 
@@ -35,7 +38,10 @@ python -m venv .venv
 | 键 | 用途 |
 |---|---|
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | LLM：补 abstract、标题结构分类 |
-| `MINERU_TOKEN` / `MINERU_MODEL`(vlm) / `MINERU_TIMEOUT` / `MINERU_CHUNK_SIZE`(200) | MinerU 云解析 |
+| `OCR_PROVIDER`(paddleocr) | Stage 1 解析引擎选择（契约见 `ocr_provider.py`；三方对比与针对性优化见 `docs/ocr-providers.md` 五之三/五之四） |
+| `MINERU_TOKEN` / `MINERU_MODEL`(vlm) / `MINERU_TIMEOUT` / `MINERU_CHUNK_SIZE`(200) | MinerU 云解析（`MINERU_MODEL` 可换 `pipeline` 后端对照碎图问题） |
+| `GLM_OCR_API_KEY` / `GLM_OCR_BASE_URL` / `GLM_OCR_TIMEOUT` / `GLM_OCR_CHUNK_SIZE`(100) | GLM-OCR 解析（智谱 layout_parsing API） |
+| `PADDLEOCR_TOKEN` / `PADDLEOCR_API_URL` / `PADDLEOCR_MODEL`(PaddleOCR-VL-1.6) / `PADDLEOCR_TIMEOUT` | PaddleOCR-VL 解析（百度 AI Studio 异步 job API，有每日页数配额） |
 | `MAX_PAPER_PAGES`(200) | 整书守卫：超页数拒收并提示走图书馆导入 |
 | `PARSED_DIR` | 已解析产物目录（默认 `F:\MyProjects\zotero-brain\parsed`） |
 | `ZOTERO_API_KEY` / `ZOTERO_USER_ID` / `ZOTERO_LIBRARY_TYPE` | 仅导出 CSL 时用 |
@@ -57,7 +63,11 @@ python -m venv .venv
 ## 管线结构
 
 ```
-stage1_mineru.py     PDF → MinerU 云解析（分片/重试）→ content_list + images
+ocr_provider.py      Stage 1 引擎抽象：产物契约 + 注册表（多引擎调研见 docs/ocr-providers.md）
+stage1_layout.py     layout 系引擎共享转换：标签映射、图注挂回图片块、公式伪影规范化
+stage1_mineru.py     MinerU Provider：云解析（分片/重试）→ content_list + images
+stage1_glm.py        GLM-OCR Provider：智谱 layout_parsing（同步 API，≤100 页/次分片）
+stage1_paddleocr.py  PaddleOCR-VL Provider：百度 AI Studio 异步 job API（≤1000 页/任务）
 metadata.py          元数据（规则/LLM/CrossRef；Zotero 优先经 zotero_meta.py）
 content_processor.py 正文 IR：噪声清除、封面页检测、表格处理、标题层级重建、
                      图组编号、段落合并、跨页续表合并、游离图注绑回
@@ -74,13 +84,17 @@ qc_scan.py           验收门禁（见下）
 
 机械检查：frontmatter 必填字段、表格组对账（跨页续表算一组，与 converter 同判据）、
 图片重名、`<sup>/<sub>` 残留、CR 字符、非法 `$^{\*}$`、H1 结构 sanity。
-当前 126 篇全绿（残留项见下）。
+PaddleOCR 全量库（`output_paddle/`，125 篇）12 异常/10 篇，逐条已定性
+（Zotero 数据缺口、qc 阈值误报、表图 tradeoff），详见 `docs/ocr-providers.md` 五之五。
+注意表组对账的"源"是 MinerU 缓存，跨引擎对比会虚增异常。
 
 ## 已知局限（诚实清单）
 
-- **碎组图绑定**：MinerU 把多图版组图切成大量独立块，图版属于哪张图只有视觉能判定
-  （hu2011 案例：Figure 6 图注已绑回，Figure 7 图注只能以编号段落保留）。
-  这是与 MinerU-Popo 模型式图文关联的本质差距。
+- **碎组图绑定**：MinerU vlm 后端把多图版组图切成大量独立块且图注常绑不回
+  （cao2022 只绑 5/9）——这是**识别阶段行为，后处理无法无损还原**。
+  已换默认引擎为 PaddleOCR-VL（图注 9/9 绑定，GLM 同优）；MinerU 仅在表格
+  密集内容时有优势（rowspan/跨页合并最稳）。子图切分三引擎都有，只能靠
+  归组编号缓解。
 - **作者 bio 照**：RSC 版式 bio 头像会被并入 Figure 1 子图（fig1a/b/c/d）。
 - **MinerU 版面缺陷**：双栏页正文可能被并进表格 HTML（已按判据拆出，但保守判据不保证全覆盖）；
   公式里的 legacy TeX 命令（`\bf/\cal/\sf/\tt/\textcircled`）pandoc/KaTeX 有警告（待扫荡）。

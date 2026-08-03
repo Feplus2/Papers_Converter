@@ -823,12 +823,23 @@ def _merge_cross_page_tables(blocks: list[dict]) -> list[dict]:
     def _is_table(b):
         return b.get("type") == "table" and (b.get("table_body") or "").strip()
 
-    def _has_text_between(i1, i2):
-        # 中间的正文块会阻断合并；出版噪声块（会被 _clean_paragraph 丢弃的）不算
+    def _header_cells(t: dict) -> set:
+        """表格首行单元格的归一化文本集合（与 _row_cells_text 同判据）"""
+        rows = _table_rows_html(t.get("table_body") or "")
+        return {txt for txt, _ in _row_cells_text(rows[0])} if rows else set()
+
+    def _has_text_between(i1, i2, t1, t2):
+        # 中间的正文块会阻断合并；出版噪声块（会被 _clean_paragraph 丢弃的）不算；
+        # 续页表头被引擎拆出的碎片文本块（与任一表格首行单元格逐字相同的短块）也不算
+        cells = _header_cells(t1) | _header_cells(t2)
         for b in blocks[i1 + 1:i2]:
             if b.get("type") in ("text", "list", "ref_text"):
                 t = (b.get("text") or "").strip()
-                if t and _clean_paragraph(t) is not None:
+                if not t:
+                    continue
+                if len(t) <= 40 and re.sub(r"\s+", "", t).lower() in cells:
+                    continue
+                if _clean_paragraph(t) is not None:
                     return True
         return False
 
@@ -841,7 +852,7 @@ def _merge_cross_page_tables(blocks: list[dict]) -> list[dict]:
             # 同页相邻的是两张表，不合；必须跨页
             if t2.get("page_idx", 0) <= t1.get("page_idx", 0):
                 continue
-            if _has_text_between(i1, i2):
+            if _has_text_between(i1, i2, t1, t2):
                 continue
             if _can_merge_tables(t1, t2):
                 _exec_table_merge(t1, t2)
@@ -1163,7 +1174,7 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
             extra_seq += 1
             for j, b in enumerate(subs):
                 ext = Path(b.img_src).suffix if b.img_src else ".png"
-                suffix = letters[j] if len(subs) > 1 else ""
+                suffix = letters[j % 26] if len(subs) > 1 else ""
                 b.img_new_name = f"figX{extra_seq}{suffix}{ext}"
                 b.content = b.caption or f"Figure X{extra_seq}"
             continue
