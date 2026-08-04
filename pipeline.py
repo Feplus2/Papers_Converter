@@ -29,6 +29,7 @@ from pathlib import Path
 import config
 from metadata import extract_metadata
 from content_processor import process_content
+from progress_headless import HeadlessProgress, emit_error
 from renderer import render_paper
 from slug import generate_slug
 from zotero_meta import get_zotero_meta
@@ -48,6 +49,7 @@ def convert_single(
     use_llm: bool = True,
     source_pdf: Path | None = None,
     zotero_key: str | None = None,
+    reporter: HeadlessProgress | None = None,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -58,6 +60,7 @@ def convert_single(
         use_llm: 是否使用 LLM 提取元数据
         source_pdf: 可选，原 PDF 路径（复制为 source.pdf）
         zotero_key: 可选，Zotero key（仅当来自 Zotero 时作为元数据写入）
+        reporter: 可选，headless 进度报告器（stage 2/3/4 事件 + done 事件）
 
     Returns:
         paper.md 路径，失败返回 None
@@ -88,12 +91,17 @@ def convert_single(
     logger.info(f"  加载 {len(content_list)} 个内容块")
 
     # Stage 2: 元数据提取（Zotero/CSL-JSON 权威元数据优先，LLM 只补 abstract）
+    t2 = time.time()
+    if reporter:
+        reporter.update_stage(2, "元数据提取", "提取论文元数据...")
     zotero_meta = get_zotero_meta(zotero_key) if zotero_key else None
     if zotero_meta:
         logger.info("  命中 Zotero CSL 元数据（author/date/container-title/citekey 以它为准）")
     metadata = extract_metadata(content_list, use_llm=use_llm, zotero_meta=zotero_meta)
     if zotero_key:
         metadata["zotero_key"] = zotero_key
+    if reporter:
+        reporter.complete_stage(2, "元数据提取", time.time() - t2)
 
     # 生成 slug（基于论文真实数据，任何语言）
     slug = generate_slug(metadata)
@@ -101,18 +109,26 @@ def convert_single(
     logger.info(f"  标题: {metadata.get('title', '?')[:60]}")
     logger.info(f"  Slug: {slug}")
 
-    # Stage 2: 正文处理（use_llm 辅助标题结构分类）
+    # Stage 3: 内容处理（use_llm 辅助标题结构分类）
+    t3 = time.time()
+    if reporter:
+        reporter.update_stage(3, "内容处理", "清洗与结构化正文块...")
     images_dir = parsed_dir / "images"
     blocks = process_content(content_list, str(images_dir),
                              use_llm=use_llm, title=metadata.get("title", ""))
     logger.info(f"  处理后 {len(blocks)} 个块")
+    if reporter:
+        reporter.complete_stage(3, "内容处理", time.time() - t3)
 
-    # Stage 3: 渲染输出
+    # Stage 4: 渲染装订
     if source_pdf is None:
         pdf_files = list(parsed_dir.glob("*.pdf"))
         if pdf_files:
             source_pdf = pdf_files[0]
 
+    t4 = time.time()
+    if reporter:
+        reporter.update_stage(4, "渲染装订", "渲染 Markdown、复制图片与 source.pdf...")
     paper_md = render_paper(
         blocks=blocks,
         metadata=metadata,
@@ -121,6 +137,14 @@ def convert_single(
         source_pdf=source_pdf,
         images_source_dir=images_dir if images_dir.exists() else None,
     )
+    if reporter:
+        reporter.complete_stage(4, "渲染装订", time.time() - t4)
+        reporter.finish(
+            slug=slug,
+            paper_dir=str(paper_md.parent.resolve()),
+            paper_md=str(paper_md.resolve()),
+            title=metadata.get("title", ""),
+        )
 
     return paper_md
 
@@ -159,6 +183,7 @@ def convert_pdf(
     provider_name: str | None = None,
     provider_opts: dict | None = None,
     zotero_key: str | None = None,
+    headless: bool = False,
 ) -> Path | None:
     """完整管线：PDF → 解析引擎 → Pandoc Markdown。
 
@@ -166,6 +191,8 @@ def convert_pdf(
     provider_name 为空时用 config.OCR_PROVIDER；provider_opts 传给引擎
     （如 MinerU 的 {"model": "pipeline"} 做后端 A/B）。
     zotero_key：批量重解析时传入，元数据走 Zotero 权威并写入 frontmatter。
+    headless：开启后进度以 JSON 行打印到 stdout（SageRead sidecar 协议，
+    见 progress_headless.py），普通日志仍走 stderr。
     """
     from ocr_provider import count_pages, get_provider
 
@@ -186,25 +213,43 @@ def convert_pdf(
         return None
 
     provider = get_provider(provider_name)
+    reporter = HeadlessProgress(pdf_path.stem, engine=provider.name) if headless else None
+    if reporter:
+        reporter.start()
+
     # staging 以 stem+内容哈希命名：不同论文都可能叫 source.pdf，仅按 stem 会碰撞
     import hashlib
     digest = hashlib.md5(pdf_path.read_bytes()).hexdigest()[:6]
     staging_dir = output_dir / "_staging" / f"{pdf_path.stem}-{digest}"
 
+    def _on_progress(detail: str, frac: float | None = None):
+        logger.info(f"  {detail}")
+        if reporter:
+            reporter.update_stage(1, provider.name, detail, frac)
+
     # Stage 1: 引擎解析（可跳过复用已有产物）
     need_parse = not skip_mineru or not list(staging_dir.glob("*_content_list.json"))
     if need_parse:
         logger.info(f"\n=== Stage 1: {provider.name} 解析 {pdf_path.name} ===")
+        if reporter:
+            reporter.update_stage(1, provider.name, f"{provider.name} 解析 {pdf_path.name}")
+        t1 = time.time()
         provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
-                       progress=lambda detail, frac=None: logger.info(f"  {detail}"),
+                       progress=_on_progress,
                        **(provider_opts or {}))
+        if reporter:
+            reporter.complete_stage(1, provider.name, time.time() - t1)
     else:
         logger.info(f"  跳过解析，复用已有产物: {staging_dir}")
+        if reporter:
+            reporter.update_stage(1, provider.name, "复用已有解析产物")
+            reporter.complete_stage(1, provider.name, 0.0)
 
-    # Stage 2/3: 转换
+    # Stage 2/3/4: 转换
     return convert_single(
         staging_dir, output_dir, use_llm=use_llm,
         source_pdf=pdf_path, zotero_key=zotero_key,
+        reporter=reporter,
     )
 
 
@@ -273,8 +318,29 @@ def main():
         default=None,
         help="批量模式下最多处理 N 篇（调试用）",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="无界面模式：进度以 JSON 行打印到 stdout（SageRead sidecar 协议），"
+             "仅作用于单篇 PDF 转换路径",
+    )
 
     args = parser.parse_args()
+
+    # headless 模式：捕获首条 ERROR 日志，作为 error 事件的 message（首条最贴近根因）
+    err_capture = None
+    if args.headless:
+        class _FirstErrorCapture(logging.Handler):
+            def __init__(self):
+                super().__init__(logging.ERROR)
+                self.first = ""
+
+            def emit(self, record):
+                if not self.first:
+                    self.first = record.getMessage()
+
+        err_capture = _FirstErrorCapture()
+        logging.getLogger().addHandler(err_capture)
 
     # 确定输出目录
     output_dir = Path(args.output_dir) if args.output_dir else config.DEFAULT_OUTPUT_DIR
@@ -344,10 +410,19 @@ def main():
         # 情况 1：PDF 文件 → 完整管线（PDF→解析引擎→MD）
         if target_path.suffix.lower() == ".pdf" or target_path.is_file():
             provider_opts = {"model": args.model} if args.model else None
-            result = convert_pdf(target_path, output_dir, use_llm=use_llm,
-                                 ocr=not args.no_ocr, skip_mineru=args.skip_mineru,
-                                 provider_name=args.provider,
-                                 provider_opts=provider_opts)
+            try:
+                result = convert_pdf(target_path, output_dir, use_llm=use_llm,
+                                     ocr=not args.no_ocr, skip_mineru=args.skip_mineru,
+                                     provider_name=args.provider,
+                                     provider_opts=provider_opts,
+                                     headless=args.headless)
+            except Exception as e:
+                # headless：栈留 stderr，stdout 发 error 事件后非 0 退出
+                logger.exception("  转换失败")
+                if args.headless:
+                    emit_error(str(e) or (err_capture.first if err_capture else "")
+                               or "转换失败")
+                sys.exit(1)
         # 情况 2：已解析目录
         elif target_path.is_dir():
             result = convert_single(target_path, output_dir, use_llm=use_llm)
@@ -364,6 +439,8 @@ def main():
             logger.info(f"\n  转换成功: {result}")
         else:
             logger.error("\n  转换失败")
+            if args.headless:
+                emit_error((err_capture.first if err_capture else "") or "转换失败")
             sys.exit(1)
 
     else:

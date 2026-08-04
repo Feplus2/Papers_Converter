@@ -4,12 +4,18 @@
 """
 
 import os
+import sys
 from pathlib import Path
+
+# PyInstaller frozen 时 __file__ 指向 _MEIPASS 临时解压目录（进程退出即删），
+# 路径锚点必须改为 exe 所在目录，否则默认输出目录会落进临时目录并随之消失
+_ANCHOR_DIR = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+               else Path(__file__).parent)
 
 
 def _load_dotenv():
-    """从项目根目录的 .env 文件加载环境变量（不覆盖已有的）"""
-    env_path = Path(__file__).parent / ".env"
+    """从项目根目录（frozen 时为 exe 目录）的 .env 文件加载环境变量（不覆盖已有的）"""
+    env_path = _ANCHOR_DIR / ".env"
     if not env_path.exists():
         return
     with open(env_path, "r", encoding="utf-8") as f:
@@ -77,7 +83,7 @@ PADDLEOCR_TIMEOUT = int(_env("PADDLEOCR_TIMEOUT", "900"))
 # ============================================================
 # 路径
 # ============================================================
-PROJECT_DIR = Path(__file__).parent
+PROJECT_DIR = _ANCHOR_DIR
 DEFAULT_OUTPUT_DIR = Path(_env("DEFAULT_OUTPUT_DIR", str(PROJECT_DIR / "output")))
 PARSED_DIR = Path(_env("PARSED_DIR", r"F:\MyProjects\zotero-brain\parsed"))
 
