@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 import shutil
 from pathlib import Path
 
@@ -151,7 +152,11 @@ def _render_body(
         # 段落间距控制
         if block.kind in ("heading", "page_anchor") and prev_kind and prev_kind != "page_anchor":
             lines.append("")
-        elif block.kind == "paragraph" and prev_kind in ("paragraph", "reference", "table"):
+        elif block.kind == "paragraph" and prev_kind in (
+                "paragraph", "reference", "table", "image", "table_image"):
+            lines.append("")
+        elif block.kind == "reference" and prev_kind:
+            # 每条引用各自成段（连续裸行会被 CommonMark 软换行合并成一个巨型段落）
             lines.append("")
         elif block.kind in ("image", "equation", "table", "table_image") and prev_kind:
             lines.append("")
@@ -181,10 +186,28 @@ def _render_body(
                 else:
                     logger.warning(f"  图片未找到: {block.img_src}")
 
-            # Markdown 图片语法（image 的 content 已由 _assign_figure_numbers
-            # 格式化为 "Figure N: caption"；table_image 保留原表注）
-            caption = block.content or block.caption or "Figure"
-            lines.append(f"![{caption}](images/{block.img_new_name})")
+            # Markdown 图片语法：alt 只留短标签（如 "Figure 2"），完整图注
+            # 作为同段落内的正文文本行（软换行分隔，与 MinerU 产物格式对齐），
+            # 保证 SageRead 切块/RAG/翻译与读者均可见（alt 文本对其不可见）。
+            # image 的 content 已由 _assign_figure_numbers 格式化为
+            # "Figure N: caption"；table_image 保留原表注。
+            caption = (block.content or block.caption or "").replace("\n", " ").strip()
+            m = re.match(
+                r"^((?:Figure|Table|Scheme|Chart)\s+[\w.\-]+(?:\s*\([a-zA-Z0-9]+\))?)\s*:(.*)$",
+                caption, re.S)
+            if m:
+                alt = m.group(1)
+            elif caption and len(caption) <= 30:
+                # 无 "标签: 正文" 结构的短标签（如子图 "Figure 4 (a)"）
+                alt = caption
+            else:
+                alt = "Figure"
+            # alt 内不允许出现方括号
+            alt = alt.replace("[", "(").replace("]", ")")
+            lines.append(f"![{alt}](images/{block.img_new_name})")
+            if caption:
+                # 图注文本行与图片行之间不留空行 → 同段落软换行
+                lines.append(caption)
 
         elif block.kind == "equation":
             lines.append(block.content)

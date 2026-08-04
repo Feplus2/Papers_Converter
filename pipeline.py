@@ -30,6 +30,7 @@ import config
 from metadata import extract_metadata
 from content_processor import process_content
 from progress_headless import HeadlessProgress, emit_error
+from qc_paper import qc_paper_md
 from renderer import render_paper
 from slug import generate_slug
 from zotero_meta import get_zotero_meta
@@ -139,6 +140,14 @@ def convert_single(
     )
     if reporter:
         reporter.complete_stage(4, "渲染装订", time.time() - t4)
+
+    # QC 自检（轻量机械检查，WARN 走 stderr，不阻断转换）
+    try:
+        qc_paper_md(paper_md)
+    except Exception as e:
+        logger.warning(f"  QC 自检异常（忽略，不影响产物）: {e}")
+
+    if reporter:
         reporter.finish(
             slug=slug,
             paper_dir=str(paper_md.parent.resolve()),
