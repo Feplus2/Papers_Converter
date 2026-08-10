@@ -19,8 +19,9 @@ _ACTUAL_FIG_RE = re.compile(
     r"^!\[(?:Figure|Fig\.?)\s*(\d+)[\w.\-]*(?:\s*\([a-zA-Z0-9]+\))?\]"
     r"|^(?:Figure|Fig\.?)\s*(\d+)(?:\.\d+)*\s*[:.]\s",
     re.M)
-# 实际表注：行首 "Table N:" / "Table N."（表注作独立段落置于表前）
-_ACTUAL_TBL_RE = re.compile(r"^Table\s*(\d+)(?:\.\d+)*\s*[:.]\s", re.M)
+# 实际表注：行首 "Table N:" / "Table N."，或无冒号直排 "Table N Caption"（MinerU pipeline
+# 产物形态——caption 首词大写以区别于 "Table 1 shows" 类行首引用句）
+_ACTUAL_TBL_RE = re.compile(r"^Table\s*(\d+)(?:\.\d+)*(?:\s*[:.]\s|\s+[A-Z])", re.M)
 _REF_HEADING_RE = re.compile(
     r"^#{1,6}\s*(references|references and notes|bibliography|works cited)\s*[:.]?\s*$",
     re.I | re.M)
