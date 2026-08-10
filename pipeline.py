@@ -19,6 +19,7 @@ Papers_Converter — 论文 PDF → Pandoc Markdown 转换管线（通用，不�
 
 import argparse
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -27,6 +28,8 @@ import time
 from pathlib import Path
 
 import config
+import quality_guard
+import figure_merger
 from metadata import extract_metadata
 from content_processor import process_content
 from progress_headless import HeadlessProgress, emit_error
@@ -51,6 +54,7 @@ def convert_single(
     source_pdf: Path | None = None,
     zotero_key: str | None = None,
     reporter: HeadlessProgress | None = None,
+    coord_normalized: bool = True,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -127,6 +131,26 @@ def convert_single(
         if pdf_files:
             source_pdf = pdf_files[0]
 
+    # 图组并集重裁：布局检测把一张 Figure 拆碎时，同词干同页块 bbox 并集整幅重裁
+    # （区域光栅化，非拼接；失败保持原产物不阻断）
+    if config.FIGURE_MERGE and source_pdf:
+        try:
+            merged = figure_merger.merge_split_figures(blocks, Path(source_pdf), images_dir, normalized=coord_normalized)
+            if merged:
+                logger.info(f"  图组并集重裁: {merged} 组")
+        except Exception as e:
+            logger.warning(f"  图组并集重裁失败（保持原产物）: {e}")
+
+    # 退化终检（渲染前对最终正文再查一次，兜住 stage1 重试后仍失控的情形）：
+    # 不阻断输出，但命中时 done 事件加 "degenerate": true，
+    # SageRead 侧据以提示用户换引擎重新解析
+    final_finding = quality_guard.find_degenerate_loop(
+        "\n".join(b.content for b in blocks if b.content))
+    if final_finding:
+        logger.warning(
+            f"  最终正文退化检测命中（{quality_guard.describe(final_finding)}），"
+            "不阻断输出，done 事件将打标 degenerate")
+
     t4 = time.time()
     if reporter:
         reporter.update_stage(4, "渲染装订", "渲染 Markdown、复制图片与 source.pdf...")
@@ -148,12 +172,15 @@ def convert_single(
         logger.warning(f"  QC 自检异常（忽略，不影响产物）: {e}")
 
     if reporter:
-        reporter.finish(
+        finish_fields = dict(
             slug=slug,
             paper_dir=str(paper_md.parent.resolve()),
             paper_md=str(paper_md.resolve()),
             title=metadata.get("title", ""),
         )
+        if final_finding:
+            finish_fields["degenerate"] = True
+        reporter.finish(**finish_fields)
 
     return paper_md
 
@@ -181,6 +208,64 @@ def _dedup_slug(slug: str, metadata: dict, output_dir: Path) -> str:
     new_slug = f"{slug}-{suffix}"
     logger.warning(f"  slug 碰撞: {slug} 已被他篇占用，改用 {new_slug}")
     return new_slug
+
+
+def _retry_opts(provider, provider_opts: dict | None, attempt: int) -> dict:
+    """stage1 第 attempt 次解析（1 基）的引擎参数。
+
+    重试时如 provider 的 parse 显式声明了 temperature/seed 形参则变化之
+    （升温/换种子以打破 VLM 模式延续），不支持则原样重跑。
+    当前内置的 mineru/glm/paddleocr 均无这两个形参 → 原样重跑。
+    """
+    opts = dict(provider_opts or {})
+    if attempt <= 1:
+        return opts
+    try:
+        params = inspect.signature(provider.parse).parameters
+    except (TypeError, ValueError):
+        return opts
+    if "temperature" in params:
+        opts["temperature"] = min(0.2 * (attempt - 1), 1.0)
+    if "seed" in params:
+        opts["seed"] = (attempt - 1) * 10007
+    return opts
+
+
+def _degenerate_fallback_parse(provider, provider_opts: dict | None, pdf_path: str,
+                               staging_dir: Path, ocr: bool, on_progress) -> bool:
+    """退化自动降级：同引擎重试仍失控时，换 MinerU pipeline 后端兜底解析。
+
+    VLM 类引擎的循环输出/模式延续是生成式固有风险；pipeline 后端是确定性
+    检测识别流水线（无生成式幻觉），公式/表格由识别模型处理，图片完整性
+    由下游 figure_merger 保障。mineru 引擎直接切 model=pipeline；其他引擎
+    在已配置 MinerU Token 时换 mineru provider。降级产物覆盖 staging（引擎
+    语义等同 mineru），返回是否实际执行了降级。
+    """
+    current_model = (provider_opts or {}).get("model")
+    if provider.name == "mineru":
+        if current_model == "pipeline":
+            return False  # 已是 pipeline 后端，无处可退
+        logger.warning("  同引擎重试仍退化，自动降级 MinerU pipeline 后端兜底解析")
+        provider.parse(pdf_path, str(staging_dir), ocr=ocr, progress=on_progress, model="pipeline")
+    else:
+        if not config.MINERU_TOKEN:
+            logger.warning("  未配置 MinerU Token，无法自动降级 pipeline（保持当前产物）")
+            return False
+        try:
+            from ocr_provider import get_provider
+            fb = get_provider("mineru")
+            logger.warning("  同引擎重试仍退化，自动降级 MinerU pipeline 后端兜底解析")
+            fb.parse(pdf_path, str(staging_dir), ocr=ocr, progress=on_progress, model="pipeline")
+        except Exception as e:
+            logger.warning(f"  降级解析失败（保持原产物）: {e}")
+            return False
+    # 降级后再查一次：pipeline 产物理论无循环退化，结果仅记录不阻断
+    finding = quality_guard.check_staging_dir(staging_dir)
+    if finding:
+        logger.warning(f"  降级产物仍命中退化检测: {quality_guard.describe(finding)}")
+    else:
+        logger.info("  降级解析完成，产物正常")
+    return True
 
 
 def convert_pdf(
@@ -238,14 +323,38 @@ def convert_pdf(
 
     # Stage 1: 引擎解析（可跳过复用已有产物）
     need_parse = not skip_mineru or not list(staging_dir.glob("*_content_list.json"))
+    # 实际解析引擎（退化自动降级后为 mineru）：决定下游图合并的坐标语义
+    effective_provider_name = provider.name
     if need_parse:
         logger.info(f"\n=== Stage 1: {provider.name} 解析 {pdf_path.name} ===")
         if reporter:
             reporter.update_stage(1, provider.name, f"{provider.name} 解析 {pdf_path.name}")
         t1 = time.time()
-        provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
-                       progress=_on_progress,
-                       **(provider_opts or {}))
+        # 退化检测与打回重解析：VLM 引擎偶发"模式延续"失控（如波长列从真实值
+        # 一路编造递增、单词重复数百次），失控是随机的，重跑常能自愈
+        for attempt in range(1, quality_guard.MAX_STAGE1_RETRIES + 2):
+            provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
+                           progress=_on_progress,
+                           **_retry_opts(provider, provider_opts, attempt))
+            finding = quality_guard.check_staging_dir(staging_dir)
+            if not finding:
+                break
+            logger.warning(
+                f"  stage1 产物退化检测命中: {quality_guard.describe(finding)}")
+            if attempt > quality_guard.MAX_STAGE1_RETRIES:
+                if _degenerate_fallback_parse(provider, provider_opts, str(pdf_path),
+                                              staging_dir, ocr, _on_progress):
+                    effective_provider_name = "mineru"
+                    if reporter:
+                        reporter.update_stage(1, provider.name, "已自动降级 pipeline 后端重解析")
+                else:
+                    logger.warning("  已达最大重试次数，接受当前产物继续下游"
+                                   "（渲染前还会对最终正文再检测一次）")
+                break
+            detail = f"检测到异常重复内容，正在重试 OCR（第 {attempt} 次）"
+            logger.warning(f"  {detail}")
+            if reporter:
+                reporter.update_stage(1, provider.name, detail)
         if reporter:
             reporter.complete_stage(1, provider.name, time.time() - t1)
     else:
@@ -259,6 +368,9 @@ def convert_pdf(
         staging_dir, output_dir, use_llm=use_llm,
         source_pdf=pdf_path, zotero_key=zotero_key,
         reporter=reporter,
+        # 图组并集重裁的坐标语义：MinerU content_list 为 0-1000 归一化（目前唯一核实；
+        # 退化自动降级后产物等同 mineru，以实际解析引擎为准）
+        coord_normalized=(effective_provider_name == "mineru"),
     )
 
 

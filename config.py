@@ -66,6 +66,9 @@ MINERU_CHUNK_SIZE = int(_env("MINERU_CHUNK_SIZE", "200"))
 # 论文页数上限：论文几乎不可能超过 200 页，超过即判定为书籍，拒收并提示改走图书馆导入
 MAX_PAPER_PAGES = int(_env("MAX_PAPER_PAGES", "200"))
 
+# 图组并集重裁（figure_merger）：布局检测把一张 Figure 拆碎时，同词干同页块 bbox 并集整幅重裁
+FIGURE_MERGE = _env_bool("FIGURE_MERGE", True)
+
 # GLM-OCR（智谱 layout_parsing API）
 GLM_OCR_API_KEY = _env("GLM_OCR_API_KEY")
 GLM_OCR_BASE_URL = _env("GLM_OCR_BASE_URL", "https://open.bigmodel.cn")

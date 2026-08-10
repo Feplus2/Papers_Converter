@@ -73,8 +73,47 @@ content_processor.py 正文 IR：噪声清除、封面页检测、表格处理�
                      图组编号、段落合并、跨页续表合并、游离图注绑回
 renderer.py          Pandoc MD 渲染（frontmatter/正文/图片复制，UTF-8+LF）
 slug.py              slug 生成（拉丁/拼音转写、citekey 优先）
+quality_guard.py     解析退化检测（签名周期法，见下节）+ stage1 打回重解析
 qc_scan.py           验收门禁（见下）
 ```
+
+## 退化检测与打回重解析（quality_guard.py）
+
+Stage 1 的 VLM 引擎在长枚举内容上偶发"模式延续"失控（真实事故：波长列从真实
+1700 nm 被编造递增到 15800 nm；单词 fire 重复数百次），失控在引擎原始产物即存在。
+检测用签名周期法（SageRead 侧 `utils/degenerate.ts` 的 Python 移植，阈值经实测调定）：
+
+- 按行扫描，行长 < 200 不查；文本映射为粗签名（Unicode 字母→`a`、数字→`0`、
+  空白折叠）后找短周期（4..50）连续重复 ≥10 次且覆盖 ≥300 字符——数字递增
+  （`0000 aa, ` 周期）与精确重复在签名层同构，都能抓住；宽表分隔行
+  （`|---|---|`，跨度有限）与正常论文不误中。
+- **Stage 1 产物落地即检**：命中则重跑解析，最多 2 次（VLM 失控是随机的，
+  原样重跑常能自愈；provider 的 `parse` 若显式声明 `temperature`/`seed` 形参，
+  重试会自动升温/换种子——当前内置三引擎均无此形参，原样重跑）。
+  headless 模式每次重试发 progress 事件（stage 1，
+  detail=`检测到异常重复内容，正在重试 OCR（第 k 次）`），percent 不前进。
+- **渲染前终检**：重试耗尽仍命中时不阻断输出，done 事件加 `"degenerate": true`
+  （无命中则不加该字段），SageRead 侧据以提示换引擎重新解析。
+  非 headless 模式两处命中均只打 WARNING 日志，不改变既有行为。
+- **退化自动降级（2026-08-11）**：重试耗尽仍命中时，不再接受产物硬扛——
+  自动换 MinerU pipeline 后端兜底重解析（确定性检测识别流水线，无生成式
+  循环幻觉；公式/表格由识别模型处理，图片由 figure_merger 保整）。mineru
+  引擎直接切 `model=pipeline`；其他引擎在已配置 MinerU Token 时换 mineru
+  provider，未配置则维持原接受+打标行为。降级后产物按 mineru 语义走下游。
+
+## 图组并集重裁（figure_merger.py）
+
+MinerU 布局检测会把一张 Figure 拆成多个块（子图 a/b/c 各一块，合并阈值官方
+硬编码无开关）。`_assign_figure_numbers` 已把碎块归组为同一 fig{N} 词干，
+本模块在其后把**同词干、同页、≥2 块的组**的 bbox 并集，从源 PDF 整幅
+光栅化重裁为一张（区域光栅化≠拼接碎图，无损无接缝、矢量图天然覆盖）。
+版式守卫：跨页/纵向跨度>75% 页高/面积>90% 页的组保守不动。坐标语义目前仅
+支持 MinerU 的 0-1000 归一化（`convert_pdf` 按实际解析引擎传
+`coord_normalized`；PaddleOCR/GLM 待补 block_bbox passthrough 后启用）。
+开关：`FIGURE_MERGE`（默认开）。
+
+测试：`python -m unittest test_quality_guard`（真实事故样本/正常样本/合成样例
++ 桩 provider 全链路重试协议，离线可跑）。
 
 ## 验收门禁
 

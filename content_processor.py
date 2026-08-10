@@ -228,6 +228,7 @@ class ProcessedBlock:
         self.img_src = kwargs.get("img_src", "")  # 原始图片路径
         self.img_new_name = kwargs.get("img_new_name", "")  # 重命名后
         self.page_idx = kwargs.get("page_idx", 0)
+        self.bbox = kwargs.get("bbox")  # 页面归一化坐标（图组并集重裁用，见 figure_merger）
 
     def __repr__(self):
         return f"<{self.kind}: {self.content[:50]}...>"
@@ -616,6 +617,7 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                 img_src=img_path,
                 img_new_name="",  # 稍后由 _assign_figure_numbers 填充
                 page_idx=page_idx,
+                bbox=block.get("bbox"),
             ))
             if body_text:
                 result.append(ProcessedBlock("paragraph", content=body_text, page_idx=page_idx))
