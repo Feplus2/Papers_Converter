@@ -26,31 +26,41 @@ _MAX_Y_SPAN_RATIO = 0.75
 _MAX_AREA_RATIO = 0.90
 
 
-def _norm_to_fitz_rect(bbox, page_rect):
-    """MinerU content_list 的 bbox 一律为 0-1000 归一化坐标（坐标空间由调用方保证，
-    不做逐块猜测——实测同一文档内 pt 与归一化并存的外观正是逐块探测的误判）。"""
+def _to_fitz_rect(bbox, page_rect, coord_space):
+    """bbox → 页面 pt 矩形。坐标空间：
+    - "mineru"：0-1000 归一化
+    - "paddleocr"：API 页渲染像素，实测 2 px/pt（144 DPI；block_bbox/2 即 pt）
+    其他空间未核实，由调用方拦截。"""
     import fitz  # 延迟导入：纯后处理路径才需要
 
     x0, y0, x1, y1 = bbox
-    sx = page_rect.width / 1000.0
-    sy = page_rect.height / 1000.0
+    if coord_space == "mineru":
+        sx = page_rect.width / 1000.0
+        sy = page_rect.height / 1000.0
+    elif coord_space == "paddleocr":
+        sx = sy = 0.5
+    else:
+        raise ValueError(f"未支持的坐标空间: {coord_space}")
     rect = fitz.Rect(x0 * sx - _PADDING_PT, y0 * sy - _PADDING_PT, x1 * sx + _PADDING_PT, y1 * sy + _PADDING_PT)
     return rect & page_rect  # 交集防越界
 
 
-def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, normalized=True) -> int:
+_SUPPORTED_SPACES = ("mineru", "paddleocr")
+
+
+def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, coord_space="mineru") -> int:
     """原地修改 blocks：可合并组的主图换整幅重裁、碎块移除。返回合并组数。
 
     blocks: process_content 输出（已 _assign_figure_numbers，块带 bbox/img_new_name）
     pdf_path: 源 PDF（重裁的画布）
     images_dir: staging 图片目录（重裁产物落此，渲染器按 img_src 复制）
-    normalized: bbox 坐标空间——True=MinerU 0-1000 归一化（目前唯一支持的语义；
-        False（其他 provider 坐标系未核实）时整体跳过合并
+    coord_space: bbox 坐标空间（"mineru" 0-1000 归一化 / "paddleocr" 144DPI 像素；
+        其他 provider 未核实，整体跳过合并）
     """
     import fitz
 
-    if not normalized:
-        logger.info("  非 MinerU 归一化坐标系，图组并集重裁跳过")
+    if coord_space not in _SUPPORTED_SPACES:
+        logger.info(f"  坐标空间 {coord_space} 未支持，图组并集重裁跳过")
         return 0
 
     # 1. 按 fig{N} 词干归组（复用 _assign_figure_numbers 的命名结果，不动其逻辑）
@@ -88,7 +98,7 @@ def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, normalize
 
             union = None
             for b in members:
-                r = _norm_to_fitz_rect(b.bbox, page.rect)
+                r = _to_fitz_rect(b.bbox, page.rect, coord_space)
                 union = r if union is None else (union | r)
             if union is None or union.is_empty:
                 continue

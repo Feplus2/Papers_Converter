@@ -153,6 +153,7 @@ class PaddleOcrProvider:
                 "index": b.get("block_id", 0),
                 "_img_name": img_name,
                 "_url": img_url,
+                "_bbox": b.get("block_bbox"),  # 透传给 content_list（图组并集重裁用）
             })
         return convert_layout_blocks(raws, page_idx, images_out,
                                      get_image_url=self._image_url)

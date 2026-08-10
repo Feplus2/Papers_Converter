@@ -162,7 +162,8 @@ def _convert_one(raw: dict, page_idx: int, images_out: Path,
         if name is None:
             return None
         return {"type": "image", "img_path": name,
-                "image_caption": [], "page_idx": page_idx}
+                "image_caption": [], "page_idx": page_idx,
+                "bbox": raw.get("_bbox")}  # 图组并集重裁的坐标（空间随 provider，见 figure_merger）
 
     # 公式类
     if label in _FORMULA_LABELS:

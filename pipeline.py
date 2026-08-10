@@ -54,7 +54,7 @@ def convert_single(
     source_pdf: Path | None = None,
     zotero_key: str | None = None,
     reporter: HeadlessProgress | None = None,
-    coord_normalized: bool = True,
+    coord_space: str | None = None,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -135,7 +135,7 @@ def convert_single(
     # （区域光栅化，非拼接；失败保持原产物不阻断）
     if config.FIGURE_MERGE and source_pdf:
         try:
-            merged = figure_merger.merge_split_figures(blocks, Path(source_pdf), images_dir, normalized=coord_normalized)
+            merged = figure_merger.merge_split_figures(blocks, Path(source_pdf), images_dir, coord_space=coord_space)
             if merged:
                 logger.info(f"  图组并集重裁: {merged} 组")
         except Exception as e:
@@ -368,9 +368,9 @@ def convert_pdf(
         staging_dir, output_dir, use_llm=use_llm,
         source_pdf=pdf_path, zotero_key=zotero_key,
         reporter=reporter,
-        # 图组并集重裁的坐标语义：MinerU content_list 为 0-1000 归一化（目前唯一核实；
-        # 退化自动降级后产物等同 mineru，以实际解析引擎为准）
-        coord_normalized=(effective_provider_name == "mineru"),
+        # 图组并集重裁的坐标空间随实际解析引擎（MinerU=0-1000 归一化 / PaddleOCR=144DPI
+        # 像素 / 其他跳过；退化自动降级后产物等同 mineru）
+        coord_space=effective_provider_name,
     )
 
 

@@ -104,12 +104,17 @@ Stage 1 的 VLM 引擎在长枚举内容上偶发"模式延续"失控（真实�
 ## 图组并集重裁（figure_merger.py）
 
 MinerU 布局检测会把一张 Figure 拆成多个块（子图 a/b/c 各一块，合并阈值官方
-硬编码无开关）。`_assign_figure_numbers` 已把碎块归组为同一 fig{N} 词干，
-本模块在其后把**同词干、同页、≥2 块的组**的 bbox 并集，从源 PDF 整幅
-光栅化重裁为一张（区域光栅化≠拼接碎图，无损无接缝、矢量图天然覆盖）。
-版式守卫：跨页/纵向跨度>75% 页高/面积>90% 页的组保守不动。坐标语义目前仅
-支持 MinerU 的 0-1000 归一化（`convert_pdf` 按实际解析引擎传
-`coord_normalized`；PaddleOCR/GLM 待补 block_bbox passthrough 后启用）。
+硬编码无开关；PaddleOCR 也会把 panel 进一步拆成碎片）。`_assign_figure_numbers`
+已把碎块归组为同一 fig{N} 词干，本模块在其后把**同词干、同页、≥2 块的组**的
+bbox 并集，从源 PDF 整幅光栅化重裁为一张（区域光栅化≠拼接碎图，无损无接缝、
+矢量图天然覆盖）。版式守卫：跨页/纵向跨度>75% 页高/面积>90% 页的组保守不动。
+坐标空间（`convert_pdf` 按实际解析引擎传 `coord_space`）：
+
+- **mineru**：content_list bbox 为 0-1000 归一化（退化降级后产物同此语义）
+- **paddleocr**：block_bbox 为 API 页渲染像素，实测 2 px/pt（144 DPI，
+  值/2 即 pt；经 stage1_layout 透传入 content_list）
+- 其他 provider（含 GLM，已下线）：未核实，整体跳过合并保持原产物
+
 开关：`FIGURE_MERGE`（默认开）。
 
 测试：`python -m unittest test_quality_guard`（真实事故样本/正常样本/合成样例
