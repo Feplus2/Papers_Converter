@@ -23,6 +23,7 @@ import inspect
 import json
 import logging
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -426,11 +427,38 @@ def convert_pdf(
     # ---- 交付前完整性闸（第二道，在 stage1 退化重试之外）----
     # 真实事故：PaddleOCR-VL 重解析 5 页 Science 论文丢了 Figure 2/3（图块+图注）
     # 和若干段落、页标记只剩 3/5——退化检测只抓"重复失控"抓不到"内容丢失"，
-    # 图/表断号与整页丢失必须升级为打回重解析
+    # 图/表断号与整页丢失必须升级为打回重解析。
+    # 最佳产物保留：每次不完整尝试打分+快照，定案交付各次尝试中的最佳者
+    # （最后一试未必最好——实测 paddle 首试 [1,4] 就优于 pipeline 末试 [4]）
+    def _score(severe_list: list, md_path: Path) -> tuple:
+        """完整性打分（越小越好）：严重问题数优先，图/表数与页标记数次之（取负，多者胜）。"""
+        try:
+            text = md_path.read_text(encoding="utf-8")
+        except OSError:
+            return (len(severe_list), 0, 0)
+        figs = len(re.findall(r"^!\[(?:Figure|Fig\.?)\s*\d+", text, re.M))
+        tbls = len(re.findall(r"^Table\s*\d+", text, re.M))
+        markers = len(re.findall(r"<!--\s*page:\s*\d+\s*-->", text))
+        return (len(severe_list), -(figs + tbls), -markers)
+
+    snap_root = output_dir / "_staging" / f"_qc_best_{digest}"
+    best: dict | None = None  # {score, severe}
+
+    def _consider(md_path: Path, severe_list: list) -> None:
+        """不完整尝试入最佳候选：更优则快照产品目录（slug 目录含 paper.md/images/metadata）。"""
+        nonlocal best
+        score = _score(severe_list, md_path)
+        if best is None or score < best["score"]:
+            if snap_root.exists():
+                shutil.rmtree(snap_root)
+            shutil.copytree(md_path.parent, snap_root)
+            best = {"score": score, "severe": list(severe_list)}
+
     severe = qc_severe_findings(paper_md, total_pages)
     if severe:
         for s in severe:
             logger.warning(f"  完整性闸: {s}")
+        _consider(paper_md, severe)
         # 同引擎重跑：缺图/丢页与退化失控同为 VLM 随机失误，重跑常能自愈
         for attempt in range(1, quality_guard.MAX_STAGE1_RETRIES + 1):
             detail = f"产物不完整（图/表断号或整页丢失），重新解析（第 {attempt} 次）"
@@ -449,6 +477,7 @@ def convert_pdf(
             severe = qc_severe_findings(paper_md, total_pages)
             if not severe:
                 break
+            _consider(paper_md, severe)
         # 仍不完整 → 换引擎兜底（缺图/丢页是引擎能力/状态问题，与"退化失控"是不同
         # 场景——Pipeline 的确定性在此无特殊优势，优先换另一家 VLM，MinerU pipeline 殿后）
         if severe and paper_md:
@@ -472,6 +501,16 @@ def convert_pdf(
                 severe = qc_severe_findings(paper_md, total_pages)
                 if not severe:
                     break
+                _consider(paper_md, severe)
+        # 定案恢复：最终次不是最佳时，用最佳快照覆盖产品目录（slug 路径不变），
+        # severe 同步换成最佳者的清单（打标按最佳产物如实报告）
+        if severe and best and best["score"] < _score(severe, paper_md):
+            logger.warning(
+                f"  完整性闸：交付各次尝试中的最佳产物（{len(best['severe'])} 条问题，"
+                f"优于最终次的 {len(severe)} 条）")
+            shutil.rmtree(paper_md.parent)
+            shutil.copytree(snap_root, paper_md.parent)
+            severe = best["severe"]
     if not paper_md:
         return None
     # 定案：无论完整与否，全管线只发这一次 done；
