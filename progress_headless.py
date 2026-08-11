@@ -45,6 +45,9 @@ class HeadlessProgress:
         self._engine = engine
         self._t0 = time.time()
         self._percent = 0  # 对外 percent，单调不减
+        # convert_single(emit_finish=False) 时暂存的 done 字段：
+        # 完整性闸期间多次重跑只允许定案后发一次 done，由 convert_pdf 统一 finish
+        self.pending_finish_fields: dict | None = None
 
     def _advance(self, value: float) -> int:
         self._percent = max(self._percent, int(round(value)))

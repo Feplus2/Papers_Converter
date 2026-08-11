@@ -1,11 +1,15 @@
 """单篇产物 QC 自检：转换收尾时对渲染出的 paper.md 做轻量机械检查。
 
-只打 WARN 日志（stderr），不阻断转换流程。检查项：
+WARN 级（qc_paper_md，只打 WARN 日志走 stderr，不阻断转换流程）：
 1. 图/表编号连续性：正文 Fig. N / Figure N / Table N 引用与实际图块/表注
    编号对账，发现断号（如有 Fig.5 无 Fig.4）打 WARN；
 2. 结构顺序异常：# References 出现在任何正文节/正文段落之前时打 WARN
    （stage1/2 排序问题的可探测信号）；
 3. References 区分段迹象：存在超长单段（软换行堆叠）时打 WARN。
+
+严重级（qc_severe_findings，返回严重问题列表，供 pipeline 完整性闸打回
+重解析/降级）：图/表编号断号（同检查 1，断号即内容缺失）+ 页数对照
+（页锚标记数明显少于 PDF 实际页数，疑似整页内容丢失）。
 """
 
 import logging
@@ -27,6 +31,14 @@ _REF_HEADING_RE = re.compile(
     re.I | re.M)
 _HEADING_RE = re.compile(r"^#{1,6}\s+.+", re.M)
 _REF_ITEM_RE = re.compile(r"^\[\d+\]")
+# 页锚标记：renderer 对 page_anchor 块输出 "<!-- page: N -->"
+_PAGE_MARK_RE = re.compile(r"^<!--\s*page:\s*\d+\s*-->\s*$", re.M)
+
+# 页数对照阈值：页标记数 <= int(pdf_pages * 0.6) 判"整页内容丢失"。
+# 0.6 只防大开裂——正常解析偶有末页/空白页无锚点，不设太严；
+# 取 <= 是为了让真实事故案例命中：zhao2020 重解析 5 页仅存 3 页标记，
+# 3 <= int(5*0.6)=3 → 命中
+PAGE_COMPLETENESS_RATIO = 0.6
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -133,3 +145,38 @@ def qc_paper_md(paper_md_path: Path) -> list[str]:
     if not warns:
         logger.info("  QC 自检通过，无 WARN")
     return warns
+
+
+def _check_page_completeness(body: str, pdf_pages: int | None) -> list[str]:
+    """页数对照：页锚标记数明显少于 PDF 实际页数 → 疑似整页内容丢失。"""
+    # ≤2 页的论文不查：content_processor 会剥掉首页的前导锚点
+    # （完整产物的标记数 ≈ 页数-1），1~2 页论文完整也只有 0~1 个标记，
+    # 必然误中阈值；且这么短的论文也无"大开裂"可防
+    if not pdf_pages or pdf_pages < 3:
+        return []
+    markers = len(_PAGE_MARK_RE.findall(body))
+    if markers <= int(pdf_pages * PAGE_COMPLETENESS_RATIO):
+        return [f"页标记 {markers}/{pdf_pages}，疑似整页内容丢失"]
+    return []
+
+
+def qc_severe_findings(paper_md_path: Path, pdf_pages: int | None) -> list[str]:
+    """完整性级（严重）检查：图/表编号断号 + 页数明显不足。返回严重问题列表。
+
+    与 qc_paper_md 的 WARN 级检查不同，严重级命中意味着产物内容不完整，
+    不应直接交付（pipeline 据此打回重解析/降级，最终仍不解决则 done 打标
+    incomplete）。排序/分段两个检查不进严重级——Science/PNAS 的
+    Acknowledgments 在 References 后是合法结构，已观察到误报。
+    """
+    try:
+        text = Path(paper_md_path).read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning(f"  QC: 无法读取 {paper_md_path}: {e}")
+        return []
+
+    body = _strip_frontmatter(text)
+    severe: list[str] = []
+    # 图/表断号直接复用 WARN 级同一检查：断号即内容缺失，全部算严重级
+    severe += _check_fig_table_continuity(body)
+    severe += _check_page_completeness(body, pdf_pages)
+    return severe

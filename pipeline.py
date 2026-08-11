@@ -33,7 +33,7 @@ import figure_merger
 from metadata import extract_metadata
 from content_processor import process_content
 from progress_headless import HeadlessProgress, emit_error
-from qc_paper import qc_paper_md
+from qc_paper import qc_paper_md, qc_severe_findings
 from renderer import render_paper
 from slug import generate_slug
 from zotero_meta import get_zotero_meta
@@ -55,6 +55,8 @@ def convert_single(
     zotero_key: str | None = None,
     reporter: HeadlessProgress | None = None,
     coord_space: str | None = None,
+    emit_finish: bool = True,
+    extra_finish_fields: dict | None = None,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -66,6 +68,12 @@ def convert_single(
         source_pdf: 可选，原 PDF 路径（复制为 source.pdf）
         zotero_key: 可选，Zotero key（仅当来自 Zotero 时作为元数据写入）
         reporter: 可选，headless 进度报告器（stage 2/3/4 事件 + done 事件）
+        coord_space: 图组并集重裁的坐标空间（随实际解析引擎）
+        emit_finish: 是否在收尾时发 done 事件。完整性闸期间多次重跑只允许
+            定案后发一次 done，中间重试传 False（字段暂存到
+            reporter.pending_finish_fields，由 convert_pdf 统一发）
+        extra_finish_fields: finish 时并入 done 事件的额外字段（如
+            {"incomplete": True, "qc_warnings": [...]}）
 
     Returns:
         paper.md 路径，失败返回 None
@@ -180,7 +188,13 @@ def convert_single(
         )
         if final_finding:
             finish_fields["degenerate"] = True
-        reporter.finish(**finish_fields)
+        if extra_finish_fields:
+            finish_fields.update(extra_finish_fields)
+        if emit_finish:
+            reporter.finish(**finish_fields)
+        else:
+            # 完整性闸期间只暂存不发，定案后由 convert_pdf 统一 reporter.finish
+            reporter.pending_finish_fields = finish_fields
 
     return paper_md
 
@@ -229,6 +243,33 @@ def _retry_opts(provider, provider_opts: dict | None, attempt: int) -> dict:
     if "seed" in params:
         opts["seed"] = (attempt - 1) * 10007
     return opts
+
+
+def _fallback_candidates(provider, provider_opts: dict | None) -> list[tuple[str, dict, str]]:
+    """完整性闸的换引擎候选链（缺图/丢页场景）：优先另一家 VLM，MinerU pipeline 殿后。
+
+    与 _degenerate_fallback_parse（退化失控场景，专要 pipeline 的确定性）是两条通道：
+    内容缺失是引擎能力/状态问题，换一家故障模式不同的引擎才是正解；
+    只列有 Token 可用的引擎（GLM 已下线不在链中）。
+    返回 (引擎名, parse 附加参数, 展示名) 列表。
+    """
+    current_model = (provider_opts or {}).get("model")
+    out: list[tuple[str, dict, str]] = []
+    if provider.name == "paddleocr":
+        if config.MINERU_TOKEN:
+            out.append(("mineru", {}, "MinerU-VLM"))
+            out.append(("mineru", {"model": "pipeline"}, "MinerU pipeline 后端"))
+    elif provider.name == "mineru":
+        if config.PADDLEOCR_TOKEN:
+            out.append(("paddleocr", {}, "PaddleOCR-VL"))
+        if current_model != "pipeline" and config.MINERU_TOKEN:
+            out.append(("mineru", {"model": "pipeline"}, "MinerU pipeline 后端"))
+    else:
+        # 其他引擎（未来扩展）：MinerU 双后端兜底
+        if config.MINERU_TOKEN:
+            out.append(("mineru", {}, "MinerU-VLM"))
+            out.append(("mineru", {"model": "pipeline"}, "MinerU pipeline 后端"))
+    return out
 
 
 def _degenerate_fallback_parse(provider, provider_opts: dict | None, pdf_path: str,
@@ -287,6 +328,11 @@ def convert_pdf(
     zotero_key：批量重解析时传入，元数据走 Zotero 权威并写入 frontmatter。
     headless：开启后进度以 JSON 行打印到 stdout（SageRead sidecar 协议，
     见 progress_headless.py），普通日志仍走 stderr。
+
+    交付前完整性闸：渲染产物经 qc_severe_findings 检查，图/表断号或整页
+    丢失则打回——同引擎重试（至多 MAX_STAGE1_RETRIES 次）→ 降级 MinerU
+    pipeline → 仍不完整则交付但 done 事件打标 "incomplete": true 并附
+    "qc_warnings"（与 "degenerate": true 同通道），done 全程只发一次。
     """
     from ocr_provider import count_pages, get_provider
 
@@ -363,15 +409,81 @@ def convert_pdf(
             reporter.update_stage(1, provider.name, "复用已有解析产物")
             reporter.complete_stage(1, provider.name, 0.0)
 
-    # Stage 2/3/4: 转换
-    return convert_single(
+    # Stage 2/3/4: 转换（reporter 存在时先不发 done——下方完整性闸可能打回
+    # 重跑，全管线只允许定案后发一次 done）
+    paper_md = convert_single(
         staging_dir, output_dir, use_llm=use_llm,
         source_pdf=pdf_path, zotero_key=zotero_key,
         reporter=reporter,
         # 图组并集重裁的坐标空间随实际解析引擎（MinerU=0-1000 归一化 / PaddleOCR=144DPI
         # 像素 / 其他跳过；退化自动降级后产物等同 mineru）
         coord_space=effective_provider_name,
+        emit_finish=False,
     )
+    if not reporter or not paper_md:
+        return paper_md
+
+    # ---- 交付前完整性闸（第二道，在 stage1 退化重试之外）----
+    # 真实事故：PaddleOCR-VL 重解析 5 页 Science 论文丢了 Figure 2/3（图块+图注）
+    # 和若干段落、页标记只剩 3/5——退化检测只抓"重复失控"抓不到"内容丢失"，
+    # 图/表断号与整页丢失必须升级为打回重解析
+    severe = qc_severe_findings(paper_md, total_pages)
+    if severe:
+        for s in severe:
+            logger.warning(f"  完整性闸: {s}")
+        # 同引擎重跑：缺图/丢页与退化失控同为 VLM 随机失误，重跑常能自愈
+        for attempt in range(1, quality_guard.MAX_STAGE1_RETRIES + 1):
+            detail = f"产物不完整（图/表断号或整页丢失），重新解析（第 {attempt} 次）"
+            logger.warning(f"  {detail}")
+            reporter.update_stage(1, provider.name, detail)
+            provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
+                           progress=_on_progress,
+                           **_retry_opts(provider, provider_opts, attempt + 1))
+            paper_md = convert_single(
+                staging_dir, output_dir, use_llm=use_llm,
+                source_pdf=pdf_path, zotero_key=zotero_key,
+                reporter=reporter, coord_space=effective_provider_name,
+                emit_finish=False)
+            if not paper_md:
+                break
+            severe = qc_severe_findings(paper_md, total_pages)
+            if not severe:
+                break
+        # 仍不完整 → 换引擎兜底（缺图/丢页是引擎能力/状态问题，与"退化失控"是不同
+        # 场景——Pipeline 的确定性在此无特殊优势，优先换另一家 VLM，MinerU pipeline 殿后）
+        if severe and paper_md:
+            for fb_name, fb_opts, fb_label in _fallback_candidates(provider, provider_opts):
+                try:
+                    fb = get_provider(fb_name)
+                    logger.warning(f"  产物不完整，自动换引擎重解析: {fb_label}")
+                    reporter.update_stage(1, provider.name, f"产物不完整，自动换 {fb_label} 重解析")
+                    fb.parse(str(pdf_path), str(staging_dir), ocr=ocr, progress=_on_progress, **fb_opts)
+                except Exception as e:
+                    logger.warning(f"  换引擎 {fb_label} 解析失败（尝试下一候选）: {e}")
+                    continue
+                effective_provider_name = fb_name
+                paper_md = convert_single(
+                    staging_dir, output_dir, use_llm=use_llm,
+                    source_pdf=pdf_path, zotero_key=zotero_key,
+                    reporter=reporter, coord_space=fb_name,
+                    emit_finish=False)
+                if not paper_md:
+                    break
+                severe = qc_severe_findings(paper_md, total_pages)
+                if not severe:
+                    break
+    if not paper_md:
+        return None
+    # 定案：无论完整与否，全管线只发这一次 done；
+    # 重试/降级后仍不完整则交付并打标 incomplete + qc_warnings，
+    # SageRead 侧据以提示用户（与 degenerate 打标同通道）
+    finish_fields = dict(reporter.pending_finish_fields or {})
+    if severe:
+        logger.warning("  完整性闸重试/降级后仍不完整，交付并打标 incomplete")
+        finish_fields["incomplete"] = True
+        finish_fields["qc_warnings"] = severe
+    reporter.finish(**finish_fields)
+    return paper_md
 
 
 def main():
