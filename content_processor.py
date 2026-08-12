@@ -1094,6 +1094,19 @@ def _assign_heading_levels(blocks: list[ProcessedBlock]) -> None:
             h.level = 1
 
 
+# 形态 2 判定用的英语封闭类功能词（介词/连词/冠词/助动词/指示词等）：
+# 前缀以这些词收尾 ⇒ 句子必未完结 ⇒ "Fig. N." 是句中引用而非图注起点
+_INCOMPLETE_ENDING_WORDS = frozenset(
+    "of and or but nor so yet for the a an in on at by with to from into onto upon over under "
+    "about between among through during before after since until unless although though because "
+    "if when while whereas that which who whom whose as than then thus hence is are was were be "
+    "been being has have had do does did can could may might shall should will would must not no "
+    "each every either neither both such its their his her our your my this these those there here "
+    "it he she we they me him them us one all any some none most more less many much few several "
+    "other another others same own very just only even also still via per vs versus etc".split()
+)
+
+
 def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
     """游离编号图注处理：把 "Figure N. ..." 文本块标为 fig_caption_text，
     供 _assign_figure_numbers 绑回未编号图组。
@@ -1104,6 +1117,7 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
        只处理图注延续到块尾的（块中间还有正文的无法可靠切分，放弃）
     """
     out = []
+    prev_para = None  # (page_idx, content) 最近的正文段落（跨页断句守卫用）
     for b in blocks:
         if b.kind != "paragraph":
             out.append(b)
@@ -1113,6 +1127,15 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
         # 只认 Figure 会把游离图注漏掉，图组被后一个编号图注错吞）
         m = re.match(r"^(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)[\.\:]\s+(\S.*)$", t, re.S)
         if m and len(m.group(2)) > 40:
+            # 跨页断句守卫：页首块且上一段句未完结（不以 .!? 等收尾）时，
+            # "Fig. N." 是上一句的句中引用而非图注起点（yang2021 实证：
+            # "…photon energies of ‖跨页‖ Fig. 3. These data…" 幻影图注
+            # 引发同号双写、整幅重裁被碎片覆盖）。保持段落不转换
+            if (prev_para is not None and b.page_idx > prev_para[0]
+                    and not re.search(r'[.!?…]["\'\)\]”’]*\s*$', prev_para[1])):
+                out.append(b)
+                prev_para = (b.page_idx, t)
+                continue
             nb = ProcessedBlock("fig_caption_text", content=m.group(2).strip(),
                                 page_idx=b.page_idx)
             nb.fig_num = m.group(1)
@@ -1122,9 +1145,21 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
         m2 = re.search(r"\b(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)[\.\:]\s+([A-Z].{40,})$", t, re.S)
         if m2:
             prefix = t[: m2.start()].strip()
-            # 前缀以 see/as shown/in 等结尾说明 "Figure N" 是引用而非图注起点，不切
-            if prefix and not re.search(r"(see|cf\.?|as shown|shown|如|见|in)$",
-                                        prefix, re.I):
+            # "Fig. N." 是否为句中引用：前缀尾词判定。尾词是英语封闭类功能词
+            # （介词/连词/冠词/助动词/指示词等）则句子必未完结——引用而非图注起点
+            # （yang2021 实证 "…photon energies of Fig. 3. These data…" 幻影图注致
+            # 同号双写、整幅重裁被碎片覆盖）；尾词是内容词或 )/数字/罗马数字
+            # （"(h) Fig. 1. …"、"(g) Region III Fig. 2. …" 面板标号收尾，park2021
+            # 实证）则是图注起点，照切
+            if prefix:
+                last_word = re.search(r"([A-Za-z]+)$", prefix)
+                is_reference = (
+                    (last_word and last_word.group(1).lower() in _INCOMPLETE_ENDING_WORDS)
+                    or re.search(r"(see|cf\.?|as shown|shown|如|见)$", prefix, re.I)
+                )
+            else:
+                is_reference = False
+            if prefix and not is_reference:
                 if prefix:
                     out.append(ProcessedBlock("paragraph", content=prefix,
                                               page_idx=b.page_idx))
@@ -1134,6 +1169,7 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
                 out.append(nb)
                 continue
         out.append(b)
+        prev_para = (b.page_idx, t)
     return out
 
 
@@ -1215,6 +1251,23 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
     # 为无编号组分配序号（figX 前缀与 fig{N} 不冲突，从 1 开始）
     extra_seq = 0
 
+    # 文件名撞名防线：同一 Figure 编号被分成两组（幻影图注/SI 重号等）时，
+    # 两组主图都会得名 fig{N}.jpg，渲染按文档序复制后者覆盖前者——静默丢图
+    # （yang2021 实证：幻影 "Fig. 3." 组把整幅重裁覆盖成碎片）。撞名自动加 -2/-3
+    used_names: set[str] = set()
+
+    def _unique(name: str) -> str:
+        if name not in used_names:
+            used_names.add(name)
+            return name
+        stem, dot, ext = name.rpartition(".")
+        k = 2
+        while f"{stem}-{k}{dot}{ext}" in used_names:
+            k += 1
+        out = f"{stem}-{k}{dot}{ext}"
+        used_names.add(out)
+        return out
+
     letters = "abcdefghijklmnopqrstuvwxyz"
     for g in groups:
         num = g["num"]
@@ -1244,13 +1297,13 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
             ext = Path(b.img_src).suffix if b.img_src else ".png"
             # 优先用原单字母 caption，否则按顺序 a/b/c
             letter = b.caption.strip().lower() if (b.caption and len(b.caption.strip()) == 1 and b.caption.strip().isalpha()) else letters[j % 26]
-            b.img_new_name = f"{fig_stem(num)}{letter}{ext}"
+            b.img_new_name = _unique(f"{fig_stem(num)}{letter}{ext}")
             b.content = f"Figure {num} ({letter})"
 
         # 主图注块
         if main is not None:
             ext = Path(main.img_src).suffix if main.img_src else ".png"
-            main.img_new_name = f"{fig_stem(num)}{ext}"
+            main.img_new_name = _unique(f"{fig_stem(num)}{ext}")
             # 图注格式："Figure N: caption"（去掉 caption 里重复的 "Fig. N" 前缀，N 可带小数）
             cap = re.sub(r"^Fig(?:ure|\.)?\s*\d+(?:\.\d+)*\.?\s*", "", main.caption or "").strip()
             main.content = f"Figure {num}: {cap}" if cap else f"Figure {num}"
