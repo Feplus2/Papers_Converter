@@ -888,6 +888,41 @@ def _rescue_prose_cells(html_str: str, page_idx: int = 0) -> tuple[str, list]:
     return clean, rescued
 
 
+def _assign_table_numbers(blocks: list[ProcessedBlock]) -> None:
+    """表注缺号补号：caption 无编号且正文存在未被占用的 'Table N' 引用时，
+    按块序分配最小的悬空引用编号。
+
+    引擎偶发丢表注的标号行（ernst2007 实证）。但无引用引用的表不补——
+    术语符号表（nomenclature）本就不编号（madler2001 实证：无编号大表是
+    符号表而非 Table 2，误补反而错标）。
+    """
+    used = set()
+    for b in blocks:
+        if b.kind in ("table", "table_image"):
+            n = _table_num(b.caption or "")
+            if n:
+                used.add(n)
+    cited: set[str] = set()
+    for b in blocks:
+        if b.kind in ("paragraph", "heading"):
+            for m in re.finditer(r"\bTable\s+(\d+)", b.content or ""):
+                cited.add(m.group(1))
+    pool = sorted((int(n) for n in cited - used))
+    for b in blocks:
+        if b.kind not in ("table", "table_image"):
+            continue
+        cap = (b.caption or "").strip()
+        if _table_num(cap):
+            continue
+        if not pool:
+            break  # 无悬空引用——可能是术语表，保持无编号
+        n = pool.pop(0)
+        b.caption = f"Table {n}: {cap}" if cap else f"Table {n}"
+        if b.kind == "table_image" and not (b.content or "").strip():
+            b.content = b.caption
+        logger.info(f"  表注补号: Table {n}（{cap[:40]}）")
+
+
 def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
     """后处理：层级重建、段落合并、编号、清理"""
     # 1. 合并段落碎片
@@ -906,6 +941,10 @@ def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
     for i, b in enumerate((b for b in blocks if b.kind == "table_image"), 1):
         ext = Path(b.img_src).suffix if b.img_src else ".png"
         b.img_new_name = f"table{i}{ext}"
+
+    # 3.6 表注缺号补号：caption 无 'Table N' 前缀时分配最小未占用编号
+    # （引擎偶发丢表注标号行，QC 引用对账会发现缺号——ernst2007 实证）
+    _assign_table_numbers(blocks)
 
     # 4. 为无编号体系的论文补编号
     _add_numbering(blocks)

@@ -71,17 +71,23 @@ def _proximity_runs(blocks) -> list[list]:
                 if len(cur) >= 2:
                     runs.append(cur)
                 cur = []
-            cur.append(b)
-            cur_page = b.page_idx
-            # 带真图注（Fig. N./Figure N:）的块：组内已有面板时作收尾
-            # （caption-last）；自己打头时说明是 caption-first 版式，开新组
-            # 继续累积后续面板。caption 是块属性不在正文流，必须显式判
-            if _REAL_CAPTION_RE.match((b.caption or b.content or "").strip()):
+            # 真图注块是组界：当前组若已有真图注成员，说明它是**新图**的主块
+            # ——先收尾（不含它）再开新组（madler2001 实证：Fig.7/Fig.8 两图
+            # 同页相邻都被扫进一组，Figure 8 整图丢失）
+            is_cap = bool(_REAL_CAPTION_RE.match((b.caption or b.content or "").strip()))
+            has_cap = any(_REAL_CAPTION_RE.match((m.caption or m.content or "").strip())
+                          for m in cur)
+            if is_cap and has_cap:
                 if len(cur) >= 2:
                     runs.append(cur)
-                    cur = []
-                    cur_page = None
-                # len(cur)==1（刚入场）：caption-first，组继续
+                cur = []
+            cur.append(b)
+            cur_page = b.page_idx
+            if is_cap and not has_cap and len(cur) >= 2:
+                # caption-last：真图注块收尾当前组
+                runs.append(cur)
+                cur = []
+                cur_page = None
             continue
         if b.kind == "page_anchor":
             continue  # 页锚透明（页变化会在下一个 image 块触发断组）
