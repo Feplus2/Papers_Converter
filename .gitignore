@@ -5,3 +5,9 @@ __pycache__/
 output/
 output_*/
 data/
+.tmp-*/
+.tmp-*
+build/
+dist/
+*.log
+*.jsonl
