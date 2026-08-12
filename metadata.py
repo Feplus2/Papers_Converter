@@ -10,6 +10,7 @@ import re
 
 import config
 from content_processor import _normalize_inline
+from cover_detect import detect_cover_pages
 
 logger = logging.getLogger(__name__)
 
@@ -18,16 +19,6 @@ _DOI_RE = re.compile(r"\b(10\.\d{4,}/[^\s,;\"'<>]+)")
 # 年份正则
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
-# 封面页检测关键词
-_COVER_PAGE_MARKERS = [
-    "university of technology",
-    "citation (apa)",
-    "document version",
-    "important note",
-    "takedown policy",
-    "downloaded from",
-    "for technical reasons",
-]
 
 
 def extract_metadata(content_list: list[dict], use_llm: bool = True,
@@ -44,8 +35,12 @@ def extract_metadata(content_list: list[dict], use_llm: bool = True,
     Returns:
         frontmatter dict，字段对齐 paper-format-contract.md
     """
-    # 检测并排除封面页
-    cover_pages = _detect_cover_pages(content_list)
+    # 检测并排除封面页（统一实现见 cover_detect；权威标题参与锚定否决）
+    cover_pages = detect_cover_pages(
+        content_list,
+        title=(zotero_meta or {}).get("title", "") or "",
+        doi=(zotero_meta or {}).get("doi", "") or "",
+    )
 
     # 收集前几页的文本块（跳过噪声类型和封面页）
     noise_types = {"header", "footer", "page_number", "aside_text"}
@@ -112,21 +107,6 @@ def extract_metadata(content_list: list[dict], use_llm: bool = True,
         meta["abstract"] = ""
 
     return meta
-
-
-def _detect_cover_pages(content_list: list[dict]) -> set:
-    """检测封面页（如大学仓库的封面页）"""
-    cover_pages = set()
-    for page_idx in range(2):
-        page_text = " ".join(
-            block.get("text", "").lower()
-            for block in content_list
-            if block.get("page_idx", 0) == page_idx
-        )
-        markers_found = sum(1 for m in _COVER_PAGE_MARKERS if m in page_text)
-        if markers_found >= 2:
-            cover_pages.add(page_idx)
-    return cover_pages
 
 
 def _rule_extract(early_blocks: list[dict], full_list: list[dict]) -> dict:

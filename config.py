@@ -69,6 +69,14 @@ MAX_PAPER_PAGES = int(_env("MAX_PAPER_PAGES", "200"))
 # 图组并集重裁（figure_merger）：布局检测把一张 Figure 拆碎时，同词干同页块 bbox 并集整幅重裁
 FIGURE_MERGE = _env_bool("FIGURE_MERGE", True)
 
+# 辅助模型结构判定通道（封面判定 LLM 仲裁等，见 docs/structure-detection.md 第四节）。
+# 默认关闭：规则判据经 127 篇语料 AB 验证零误杀，到达极限后再开启
+STRUCTURE_LLM = _env_bool("STRUCTURE_LLM", False)
+
+# 脏 PDF 文章边界切分（article_boundary）：权威标题锚点头切 + References 后尾切。
+# 只吃锚点强信号（详见模块 docstring 与 docs/structure-detection.md 第五节）
+ARTICLE_BOUNDARY = _env_bool("ARTICLE_BOUNDARY", True)
+
 # GLM-OCR（智谱 layout_parsing API）
 GLM_OCR_API_KEY = _env("GLM_OCR_API_KEY")
 GLM_OCR_BASE_URL = _env("GLM_OCR_BASE_URL", "https://open.bigmodel.cn")

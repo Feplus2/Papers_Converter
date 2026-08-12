@@ -1,12 +1,17 @@
 """同图碎块并集重裁（figure_merger）
 
 背景：MinerU 布局检测把一张 Figure 拆成多个块（子图 a/b/c 各一块），合并阈值
-硬编码、官方无开关（MinerU issues #4335/#4008 等）。converter 的
-_assign_figure_numbers 已把碎块归组为同一 fig{N} 词干，本模块在归组之后：
-同词干、同页、≥2 块的组 → bbox 并集 → 从源 PDF 整幅光栅化重裁。
+硬编码、官方无开关（MinerU issues #4335/#4008 等）。
 
-注意：重裁 = 把并集区域内的原始内容（位图+矢量+文字）重新光栅化，无损无接缝，
-不是把已裁碎的小图拼接。合并失败一律保持原产物，不阻断管线。
+归组规则（2026-08-13 改为**就近成组**，用户拍板）：
+同页连续图片块，中间只夹小文字块（≤20 字符的面板字母/碎片，如 "A"、"(a)"）
+即归为一组；大文字块（图注/正文段落）隔开才断开。不再依赖图编号词干——
+编号本身可能错（zhao2020 实证：游离 "Fig. 1." 图注未绑回，两个 Figure 1
+面板被吞进 Figure 2 组）。
+
+组内取 bbox 并集 → 从源 PDF 整幅光栅化重裁。重裁 = 把并集区域内的原始内容
+（位图+矢量+文字）重新光栅化，无损无接缝，不是把已裁碎的小图拼接。
+合并失败一律保持原产物，不阻断管线。
 """
 
 import logging
@@ -24,6 +29,12 @@ _PADDING_PT = 5.0
 _MAX_Y_SPAN_RATIO = 0.75
 # 并集面积超过页面 90% 同理
 _MAX_AREA_RATIO = 0.90
+# 小文字块豁免阈值：面板字母/碎片（"A"、"(a)"、"A C B C"）不打断图组
+_MAX_INTERRUPT_CHARS = 20
+# 真图注标记（组内存活块优先选带真图注的；编号后必须跟 . 或 : 才算——
+# 面板标签 'Figure 2 (a)' 是 _assign_figure_numbers 生成的占位，误当图注
+# 会让每个带标块各自成组、永远合并不了）
+_REAL_CAPTION_RE = re.compile(r"^\s*(?:Figure|Fig\.?)\s*\d+(?:\.\d+)*\s*[\.\:]", re.I)
 
 
 def _to_fitz_rect(bbox, page_rect, coord_space):
@@ -48,8 +59,46 @@ def _to_fitz_rect(bbox, page_rect, coord_space):
 _SUPPORTED_SPACES = ("mineru", "paddleocr")
 
 
+def _proximity_runs(blocks) -> list[list]:
+    """就近成组：同页连续图片块为一组；中间只夹小文字块（≤20 字符的面板
+    字母/碎片）不打断；大文字块（图注/正文段落）隔开则断开。"""
+    runs: list[list] = []
+    cur: list = []
+    cur_page = None
+    for b in blocks:
+        if b.kind == "image" and getattr(b, "bbox", None):
+            if cur and b.page_idx != cur_page:
+                if len(cur) >= 2:
+                    runs.append(cur)
+                cur = []
+            cur.append(b)
+            cur_page = b.page_idx
+            # 带真图注（Fig. N./Figure N:）的块：组内已有面板时作收尾
+            # （caption-last）；自己打头时说明是 caption-first 版式，开新组
+            # 继续累积后续面板。caption 是块属性不在正文流，必须显式判
+            if _REAL_CAPTION_RE.match((b.caption or b.content or "").strip()):
+                if len(cur) >= 2:
+                    runs.append(cur)
+                    cur = []
+                    cur_page = None
+                # len(cur)==1（刚入场）：caption-first，组继续
+            continue
+        if b.kind == "page_anchor":
+            continue  # 页锚透明（页变化会在下一个 image 块触发断组）
+        text_len = len((getattr(b, "content", "") or "").strip())
+        if text_len <= _MAX_INTERRUPT_CHARS:
+            continue  # 小文字块豁免（面板字母/碎片）
+        if len(cur) >= 2:
+            runs.append(cur)
+        cur = []
+        cur_page = None
+    if len(cur) >= 2:
+        runs.append(cur)
+    return runs
+
+
 def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, coord_space="mineru") -> int:
-    """原地修改 blocks：可合并组的主图换整幅重裁、碎块移除。返回合并组数。
+    """原地修改 blocks：可合并组的存活块换整幅重裁、其余块移除。返回合并组数。
 
     blocks: process_content 输出（已 _assign_figure_numbers，块带 bbox/img_new_name）
     pdf_path: 源 PDF（重裁的画布）
@@ -63,36 +112,20 @@ def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, coord_spa
         logger.info(f"  坐标空间 {coord_space} 未支持，图组并集重裁跳过")
         return 0
 
-    # 1. 按 fig{N} 词干归组（复用 _assign_figure_numbers 的命名结果，不动其逻辑）
-    groups = {}  # stem -> {"main": block|None, "subs": [...]}
-    for b in blocks:
-        if b.kind != "image" or not getattr(b, "img_new_name", "") or not getattr(b, "bbox", None):
-            continue
-        m = _FIG_STEM_RE.match(b.img_new_name)
-        if not m:
-            continue
-        g = groups.setdefault(m.group(1), {"main": None, "subs": []})
-        if m.group(2):
-            g["subs"].append(b)
-        else:
-            g["main"] = b
-
-    candidates = {
-        stem: g for stem, g in groups.items()
-        if g["main"] is not None and len(g["subs"]) >= 1
-    }
-    if not candidates:
+    # 就近成组（不依赖图编号——编号可能错，位置不会）
+    runs = _proximity_runs(blocks)
+    if not runs:
         return 0
 
     doc = fitz.open(str(pdf_path))
     merged = 0
     drop_ids = set()
+    used_names: set[str] = set()
     try:
-        for stem, g in candidates.items():
-            members = [g["main"]] + g["subs"]
+        for members in runs:
             pages = {b.page_idx for b in members}
             if len(pages) != 1:
-                logger.info(f"  图组 {stem} 跨页 {sorted(pages)}，保持原样")
+                logger.info(f"  图组跨页 {sorted(pages)}，保持原样")
                 continue
             page = doc[members[0].page_idx]
 
@@ -104,19 +137,32 @@ def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, coord_spa
                 continue
             # 版式守卫：纵向跨度/面积异常→疑似误并两张独立图，保持原样
             if union.height > page.rect.height * _MAX_Y_SPAN_RATIO:
-                logger.info(f"  图组 {stem} 并集纵向跨页 {union.height / page.rect.height:.0%}，疑似误并，保持原样")
+                logger.info(f"  图组并集纵向跨页 {union.height / page.rect.height:.0%}，疑似误并，保持原样")
                 continue
             if union.get_area() > page.rect.get_area() * _MAX_AREA_RATIO:
-                logger.info(f"  图组 {stem} 并集面积占页 {union.get_area() / page.rect.get_area():.0%}，疑似误并，保持原样")
+                logger.info(f"  图组并集面积占页 {union.get_area() / page.rect.get_area():.0%}，疑似误并，保持原样")
                 continue
 
-            pix = page.get_pixmap(clip=union, dpi=dpi)
+            # 存活块：优先带真图注的成员（图注随图走），否则首块
+            survivor = next(
+                (b for b in members
+                 if _REAL_CAPTION_RE.match((b.caption or b.content or "").strip())),
+                members[0])
+            stem_m = _FIG_STEM_RE.match(survivor.img_new_name or "")
+            stem = stem_m.group(1) if stem_m else "fig"
             out_name = f"{stem}_merged.jpg"
+            n = 1
+            while out_name in used_names:
+                n += 1
+                out_name = f"{stem}_merged{n}.jpg"
+            used_names.add(out_name)
+            pix = page.get_pixmap(clip=union, dpi=dpi)
             pix.save(str(Path(images_dir) / out_name), output="jpeg", jpg_quality=90)
 
-            g["main"].img_src = out_name  # 渲染器按 img_src 复制为 img_new_name
-            for sb in g["subs"]:
-                drop_ids.add(id(sb))
+            survivor.img_src = out_name  # 渲染器按 img_src 复制为 img_new_name
+            for sb in members:
+                if sb is not survivor:
+                    drop_ids.add(id(sb))
             merged += 1
             logger.info(f"  图组 {stem}: {len(members)} 块 → 整幅重裁 {out_name}")
     finally:

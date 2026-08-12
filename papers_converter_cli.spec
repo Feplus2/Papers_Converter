@@ -12,7 +12,9 @@ a = Analysis(
     hiddenimports=['mineru', 'fitz', 'pymupdf', 'openai', 'yaml', 'pypinyin', 'requests',
                    # ocr_provider 用 importlib 懒加载 provider，静态分析扫不到，必须显式列出
                    'ocr_provider', 'stage1_mineru', 'stage1_glm', 'stage1_paddleocr',
-                   'stage1_layout'],
+                   'stage1_layout',
+                   # 结构判定模块（structure_llm 为函数内懒加载，静态分析扫不到）
+                   'cover_detect', 'article_boundary', 'structure_llm'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

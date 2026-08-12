@@ -10,6 +10,10 @@ import re
 from html import unescape
 from pathlib import Path
 
+import config
+from article_boundary import apply_article_boundary
+from cover_detect import detect_cover_pages
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,16 +95,9 @@ def _normalize_inline(text: str) -> str:
 # 噪声块类型（直接丢弃）
 _NOISE_TYPES = {"header", "footer", "page_number", "aside_text"}
 
-# 封面页检测关键词
-_COVER_PAGE_MARKERS = [
-    "university of technology",
-    "citation (apa)",
-    "document version",
-    "important note",
-    "takedown policy",
-    "downloaded from",
-    "for technical reasons",
-]
+# 封面页判定已移至 cover_detect.py 统一实现（2026-08-12 封面误判事故根修：
+# 旧实现拼页全文数关键词 >=2 即整页丢弃，zhao2020 正文第二页被静默切除，
+# 详见 docs/structure-detection.md）
 
 # 固定段标题（不自动编号）
 _FIXED_SECTIONS = {
@@ -248,10 +245,8 @@ def process_content(content_list: list[dict], images_dir: str = "",
     Returns:
         ProcessedBlock 列表
     """
-    # Step 1: 检测并跳过封面页
-    cover_pages = _detect_cover_pages(content_list)
-    if cover_pages:
-        logger.info(f"  检测到封面页: {cover_pages}，将跳过")
+    # Step 1: 检测并跳过封面页（只可能判 page 0，判定依据带日志，见 cover_detect）
+    cover_pages = detect_cover_pages(content_list, title=title)
 
     # Step 2: 过滤噪声块
     filtered = []
@@ -272,6 +267,11 @@ def process_content(content_list: list[dict], images_dir: str = "",
 
     # Step 3: 构建 IR
     blocks = _build_ir(filtered, images_dir)
+
+    # Step 3.5: 脏 PDF 文章边界切分（杂志截页类：标题锚点头切 + References 后尾切，
+    # 锚点强信号触发，弱信号不动刀；见 article_boundary 与 docs/structure-detection.md）
+    if config.ARTICLE_BOUNDARY:
+        blocks = apply_article_boundary(blocks, title)
 
     # Step 4: 标题结构分类（区分章节/图注/噪声/副标题）
     blocks = _classify_headings(blocks, use_llm=use_llm, title=title)
@@ -481,25 +481,6 @@ def _llm_classify(blocks, heading_idxs, feat, classes, title) -> None:
         logger.info(f"  LLM 标题分类校正: {len(items)} 项")
     except Exception as e:
         logger.warning(f"  LLM 标题分类失败（保留规则结果）: {e}")
-
-
-def _detect_cover_pages(content_list: list[dict]) -> set[int]:
-    """检测封面页（如大学仓库的封面页）"""
-    cover_pages = set()
-
-    # 只检查前 2 页
-    for page_idx in range(2):
-        page_text = " ".join(
-            block.get("text", "").lower()
-            for block in content_list
-            if block.get("page_idx", 0) == page_idx
-        )
-        # 如果页面包含多个封面标记，判定为封面页
-        markers_found = sum(1 for m in _COVER_PAGE_MARKERS if m in page_text)
-        if markers_found >= 2:
-            cover_pages.add(page_idx)
-
-    return cover_pages
 
 
 def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
@@ -1089,16 +1070,17 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
             out.append(b)
             continue
         t = b.content.strip()
-        # 形态 1：独立图注块
-        m = re.match(r"^Figure\s+(\d+(?:\.\d+)*)[\.\:]\s+(\S.*)$", t, re.S)
+        # 形态 1：独立图注块（"Figure 7." / "Fig. 1." 都算——Science 系用缩写，
+        # 只认 Figure 会把游离图注漏掉，图组被后一个编号图注错吞）
+        m = re.match(r"^(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)[\.\:]\s+(\S.*)$", t, re.S)
         if m and len(m.group(2)) > 40:
             nb = ProcessedBlock("fig_caption_text", content=m.group(2).strip(),
                                 page_idx=b.page_idx)
             nb.fig_num = m.group(1)
             out.append(nb)
             continue
-        # 形态 2：句中粘连，切分点是 "Figure N. " 且其后直到块尾都是图注
-        m2 = re.search(r"\bFigure\s+(\d+(?:\.\d+)*)[\.\:]\s+([A-Z].{40,})$", t, re.S)
+        # 形态 2：句中粘连，切分点是 "Figure N. "/"Fig. N. " 且其后直到块尾都是图注
+        m2 = re.search(r"\b(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)[\.\:]\s+([A-Z].{40,})$", t, re.S)
         if m2:
             prefix = t[: m2.start()].strip()
             # 前缀以 see/as shown/in 等结尾说明 "Figure N" 是引用而非图注起点，不切
@@ -1141,25 +1123,54 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
     def fig_stem(num: str) -> str:
         return "fig" + num.replace(".", "-")
 
-    # 分组：页间隔 >1 或上一块是主图注块时开新组
-    groups = []       # 每组: {"sub": [...], "main": block|None, "num": str|None}
-    cur = {"sub": [], "main": None, "num": None}
+    # 分组：按正文流顺序，页间隔 >1 或遇编号块时开新组。
+    # 游离编号图注（fig_caption_text）也是组边界——图注编号直接定组号
+    # （zhao2020 实证："Fig. 1." 游离图注在面板组之前，不参与归组会导致
+    # 面板被下一个编号图组错吞）
+    cap_blocks = [b for b in blocks if b.kind == "fig_caption_text"]
+    cap_by_id = {id(b): b for b in cap_blocks}
+    stream = [b for b in blocks
+              if b.kind == "image" or b.kind == "fig_caption_text"]
+    groups = []       # 每组: {"sub": [...], "main": block|None, "num": str|None, "cap": block|None}
+    cur = {"sub": [], "main": None, "num": None, "cap": None}
     prev_page = None
-    for b in images:
+    for b in stream:
+        if b.kind == "fig_caption_text":
+            n = getattr(b, "fig_num", None)
+            if n is None:
+                continue
+            if cur["sub"] or cur["main"]:
+                # caption-last：游离图注收尾当前组
+                cur["num"] = n
+                cur["cap"] = b
+                groups.append(cur)
+                cur = {"sub": [], "main": None, "num": None, "cap": None}
+            else:
+                # caption-first（zhao2020 'Fig. 1.' 实证）：图注先挂号开新组，
+                # 等后续面板汇入
+                if cur["cap"] is not None:
+                    groups.append(cur)
+                    cur = {"sub": [], "main": None, "num": None, "cap": None}
+                cur["num"] = n
+                cur["cap"] = b
+            continue
         if prev_page is not None and b.page_idx - prev_page > 1:
             groups.append(cur)
-            cur = {"sub": [], "main": None, "num": None}
+            cur = {"sub": [], "main": None, "num": None, "cap": None}
         n = fig_num(b)
         if n is not None:
-            # 主图注块：先落盘之前的子图，再结束本组
+            # 编号主图块：当前组已被游离图注占号或已有主图时，先落盘再开新组
+            if cur["cap"] is not None or cur["main"] is not None:
+                groups.append(cur)
+                cur = {"sub": [], "main": None, "num": None, "cap": None}
             cur["main"] = b
             cur["num"] = n
             groups.append(cur)
-            cur = {"sub": [], "main": None, "num": None}
+            cur = {"sub": [], "main": None, "num": None, "cap": None}
         else:
             cur["sub"].append(b)
         prev_page = b.page_idx
-    if cur["sub"] or cur["main"]:
+    if cur["sub"] or cur["main"] or cur["cap"]:
         groups.append(cur)
 
     # 为无编号组分配序号（figX 前缀与 fig{N} 不冲突，从 1 开始）
@@ -1180,6 +1191,14 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
                 b.img_new_name = f"figX{extra_seq}{suffix}{ext}"
                 b.content = b.caption or f"Figure X{extra_seq}"
             continue
+
+        # 游离图注定组（cap 有、main 无）：首图升为主图并携带图注，
+        # 图注块标记移除（caption-first 版式，zhao2020 'Fig. 1.' 实证）
+        if g["cap"] is not None and main is None and subs:
+            main = subs.pop(0)
+            g["main"] = main
+            main.caption = f"Fig. {num}. {g['cap'].content}"
+            g["cap"].kind = "_bound"
 
         # 子图块：字母后缀
         for j, b in enumerate(subs):
@@ -1220,6 +1239,16 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
             if g is not None and g["num"] is None:
                 target = g
             break
+        if target is None:
+            # 图注在图组之前（内容流里图注先行，Science 实证）：向后找最近的
+            # 未编号组（同样不跳过已编号组）
+            for ipos, ib in img_positions:
+                if ipos <= idx:
+                    continue
+                g = group_of.get(id(ib))
+                if g is not None and g["num"] is None:
+                    target = g
+                break
         if target is not None:
             gpage = max(x.page_idx for x in ([target["main"]] if target["main"] else []) + target["sub"])
             # 页距过大（图注离图组超过 1 页）不绑
