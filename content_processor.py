@@ -35,6 +35,33 @@ _BROKEN_RBRACE_SUP_RE = re.compile(r"\$(\w+)\}\^")  # "$Na}^+$" → "$Na^+$"（}
 # （$ 漏进数学区会让 pandoc 重新切 span 并吃掉 \mathrm{ 导致 eof）
 _MATHRM_WRAP_UNWRAP_RE = re.compile(r"\\mathrm\{\$([A-Za-z0-9]+)\}")
 
+# MinerU VLM 多行公式编号拆行伪影：编号 "(50)" 沿 array 行竖排拆开时，VLM
+# 先给首行残缺编号生成 \tag{5}、末尾又补完整 \tag{50}，双 \tag 被 KaTeX 拒收
+# （"Multiple \tag"）。实例：cosmic strings 论文 Eq.(50) / Eq.(A2)。
+_EQUATION_TAG_RE = re.compile(r"\\tag\*?\s*\{[^{}]*\}")
+
+
+def _dedup_equation_tags(text: str) -> str:
+    """同一条公式出现多个 \\tag 时只保留一个，其余删除。
+
+    保留内容最长者（最完整的编号），并列取最末——伪影形态是残缺编号在前、
+    完整编号在后（"\\tag{5}\\tag{50}" / "\\tag{A}\\tag{A2}"），取最末与取最长
+    结论一致；用最长是防 "\\tag{50}\\tag{5}" 这类倒序残缺。
+    """
+    ms = list(_EQUATION_TAG_RE.finditer(text))
+    if len(ms) <= 1:
+        return text
+    keep = max(range(len(ms)), key=lambda i: (len(ms[i].group(0)), i))
+    out, prev = [], 0
+    for i, m in enumerate(ms):
+        if i == keep:
+            out.append(text[prev:m.end()])
+        else:
+            out.append(text[prev:m.start()])
+        prev = m.end()
+    out.append(text[prev:])
+    return "".join(out)
+
 
 def _frac_merge(m: re.Match) -> str:
     # 右侧可能还嵌着第二个 $（变量被单独切出，如 "{0$.5-$x}"）——一并去掉
@@ -531,6 +558,8 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
 
         # --- 公式 ---
         if block_type == "equation":
+            # 编号拆行伪影去重（多 \tag → 单 \tag，见 _dedup_equation_tags）
+            text = _dedup_equation_tags(text)
             # 确保 $$ 包裹
             eq_text = text
             if not eq_text.startswith("$$"):
