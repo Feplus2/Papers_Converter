@@ -2,7 +2,7 @@
 #
 # 用法:
 #   python ab_cover_detect.py [parsed_dir] [--extra GLOB ...]
-#   parsed_dir 默认 F:\MyProjects\zotero-brain\parsed（126 篇解析缓存）
+#   parsed_dir：解析缓存目录（content_list.json 所在），需显式传入
 #   --extra 追加 content_list 通配（如事故 staging：'.tmp-qc-gate-run\_staging\*\*_content_list.json'）
 #
 # 输出：对照表（旧判定 / 新判定 / 差异标注）+ 汇总。
@@ -42,8 +42,8 @@ def page_features(content_list: list[dict], pidx: int) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("parsed_dir", nargs="?",
-                    default=r"F:\MyProjects\zotero-brain\parsed")
+    ap.add_argument("parsed_dir", nargs="?", default="parsed",
+                    help="解析缓存目录（含 *_content_list.json）")
     ap.add_argument("--extra", action="append", default=[],
                     help="追加 content_list 通配")
     args = ap.parse_args()
