@@ -25,9 +25,8 @@ from qc_paper import (
     qc_severe_findings,
 )
 
-_SAGEREAD_BOOKS = Path(os.environ.get(
-    "SAGEREAD_BOOKS_DIR",
-    r"C:/Users/20995/AppData/Roaming/com.xincmm.sageread.dev/books"))
+# 真实样本目录经 SAGEREAD_BOOKS_DIR 指定（开发机路径不入库；不设或不存在时自动 skip）
+_SAGEREAD_BOOKS = Path(os.environ.get("SAGEREAD_BOOKS_DIR", "sageread_books_not_found"))
 # 真实事故样本：LED 波长列从真实 1700 nm 被编造递增到 15800+ nm
 INCIDENT_MD = _SAGEREAD_BOOKS / "e69eb8d5ef7bb450" / "paper.md"
 # 正常论文（不得命中）
