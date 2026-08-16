@@ -6,9 +6,11 @@ import sys
 from pathlib import Path
 
 from content_processor import _can_merge_tables, _clean_paragraph
+import config
 
 out = Path(sys.argv[1] if len(sys.argv) > 1 else "output")
-parsed = Path(r"F:\MyProjects\zotero-brain\parsed")
+# 表组对账的"源"：解析缓存目录（ZOTERO_PARSED_DIR / PARSED_DIR 配置）
+parsed = config.PARSED_DIR
 
 _NOISE = {"header", "footer", "page_number", "aside_text"}
 
@@ -46,19 +48,23 @@ def _table_groups(data: list) -> int:
     return groups
 
 
-# 源数据索引：zotero_key -> 统计
+# 源数据索引：zotero_key -> 统计（解析缓存目录不存在时跳过表组对账）
 src = {}
-for d in parsed.iterdir():
-    if not d.is_dir():
-        continue
-    cls = list(d.glob("*_content_list.json"))
-    if not cls:
-        continue
-    try:
-        data = json.load(open(cls[0], encoding="utf-8"))
-    except Exception:
-        continue
-    src[d.name] = {"table_groups": _table_groups(data)}
+if parsed.exists():
+    for d in parsed.iterdir():
+        if not d.is_dir():
+            continue
+        cls = list(d.glob("*_content_list.json"))
+        if not cls:
+            continue
+        try:
+            data = json.load(open(cls[0], encoding="utf-8"))
+        except Exception:
+            continue
+        src[d.name] = {"table_groups": _table_groups(data)}
+else:
+    print(f"提示: 解析缓存目录不存在（{parsed}），跳过表组对账"
+          "（经 ZOTERO_PARSED_DIR 配置）")
 
 # slug 目录 -> zotero_key（从 frontmatter 读）
 issues = []

@@ -11,3 +11,6 @@ build/
 dist/
 *.log
 *.jsonl
+
+# 一次性事故验证脚本（本地保留，不入库）
+reconvert_check.py

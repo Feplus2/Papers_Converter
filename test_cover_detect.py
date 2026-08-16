@@ -16,8 +16,8 @@ from pathlib import Path
 from cover_detect import detect_cover_pages, legacy_detect_cover_pages
 from structure_llm import arbitrate, page_digest
 
-_PARSED = Path(os.environ.get(
-    "ZOTERO_PARSED_DIR", r"F:\MyProjects\zotero-brain\parsed"))
+# 真实样本目录经 ZOTERO_PARSED_DIR 指定（开发机路径不入库；不设或不存在时自动 skip）
+_PARSED = Path(os.environ.get("ZOTERO_PARSED_DIR", "zotero_parsed_not_found"))
 
 
 def _text_block(text: str) -> dict:

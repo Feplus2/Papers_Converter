@@ -96,7 +96,11 @@ PADDLEOCR_TIMEOUT = int(_env("PADDLEOCR_TIMEOUT", "900"))
 # ============================================================
 PROJECT_DIR = _ANCHOR_DIR
 DEFAULT_OUTPUT_DIR = Path(_env("DEFAULT_OUTPUT_DIR", str(PROJECT_DIR / "output")))
-PARSED_DIR = Path(_env("PARSED_DIR", r"F:\MyProjects\zotero-brain\parsed"))
+# 已解析产物目录（Zotero 解析缓存，批量 --all 的数据源）：
+# 优先 ZOTERO_PARSED_DIR，旧键 PARSED_DIR 兼容；均不设时回退下方历史默认值
+# （开发机路径）——新用户请配置环境变量或 .env 指向自己的解析缓存目录。
+PARSED_DIR = Path(_env("ZOTERO_PARSED_DIR",
+                       _env("PARSED_DIR", r"F:\MyProjects\zotero-brain\parsed")))
 
 # ============================================================
 # Zotero（可选）：CSL-JSON 权威元数据

@@ -572,7 +572,8 @@ def main():
     parser.add_argument(
         "--provider",
         default=None,
-        help="Stage 1 解析引擎（默认取 .env 的 OCR_PROVIDER，当前内置: mineru）",
+        help="Stage 1 解析引擎（默认取 .env 的 OCR_PROVIDER；内置 mineru / "
+             "paddleocr，glm 已下线——代码保留，不推荐）",
     )
     parser.add_argument(
         "--model",
