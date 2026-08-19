@@ -34,6 +34,7 @@ python -m venv .venv
 #   --skip-mineru   复用 _staging 的解析产物，不重新提交解析
 #   --provider X    指定 Stage 1 解析引擎（内置 mineru / paddleocr；glm 已下线，代码保留不推荐）
 #   --model X       引擎后端 A/B（如 MinerU 的 vlm / pipeline）
+#   --no-links      不保留 PDF 原生链接（默认启用，见 link_extractor.py；A/B 用）
 #   -o DIR          输出目录（默认 ./output）
 ```
 

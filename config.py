@@ -69,6 +69,10 @@ MAX_PAPER_PAGES = int(_env("MAX_PAPER_PAGES", "200"))
 # 图组并集重裁（figure_merger）：布局检测把一张 Figure 拆碎时，同词干同页块 bbox 并集整幅重裁
 FIGURE_MERGE = _env_bool("FIGURE_MERGE", True)
 
+# P1 原生链接保留（link_extractor）：从源 PDF 提取 link annotations 注入 paper.md
+# （行内链接 + 锚点）。仅当输入是 PDF 且有链接注释时生效，扫描版/无注释 PDF 零副作用
+PDF_LINKS = _env_bool("PDF_LINKS", True)
+
 # 辅助模型结构判定通道（封面判定 LLM 仲裁等，见 docs/structure-detection.md 第四节）。
 # 默认关闭：规则判据经 127 篇语料 AB 验证零误杀，到达极限后再开启
 STRUCTURE_LLM = _env_bool("STRUCTURE_LLM", False)

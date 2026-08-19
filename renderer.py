@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 
 from content_processor import ProcessedBlock
+from link_extractor import block_anchor_id
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ def render_paper(
     slug: str,
     source_pdf: Path | None = None,
     images_source_dir: Path | None = None,
+    link_anchors: set | None = None,
 ) -> Path:
     """
     渲染论文为 Pandoc Markdown 并输出到目录。
@@ -46,6 +48,8 @@ def render_paper(
         slug: 论文 slug
         source_pdf: 可选的源 PDF 路径
         images_source_dir: 原始图片目录
+        link_anchors: 可选，需发射的锚点 id 集合（P1 原生链接保留，
+            见 link_extractor；None/空集 → 不发射任何锚点，输出与旧版一致）
 
     Returns:
         paper.md 的完整路径
@@ -65,7 +69,8 @@ def render_paper(
     frontmatter_str = _render_frontmatter(metadata)
 
     # 渲染正文
-    body_str = _render_body(blocks, images_source_dir, images_out_dir)
+    body_str = _render_body(blocks, images_source_dir, images_out_dir,
+                            link_anchors=link_anchors)
 
     # 组合最终文档
     doc = frontmatter_str + "\n" + body_str
@@ -143,10 +148,22 @@ def _render_body(
     blocks: list[ProcessedBlock],
     images_source_dir: Path | None,
     images_out_dir: Path,
+    link_anchors: set | None = None,
 ) -> str:
     """渲染正文 Markdown"""
     lines = []
     prev_kind = None
+    emitted_anchors: set = set()  # 锚点去重：同 id 只发射第一次（重复标题/重号图）
+
+    def _anchor_line(block) -> str | None:
+        """P1 锚点：块在链接目标集合内且未发射过 → 行内 HTML 锚点标记"""
+        if not link_anchors:
+            return None
+        aid = block_anchor_id(block)
+        if aid and aid in link_anchors and aid not in emitted_anchors:
+            emitted_anchors.add(aid)
+            return f'<a id="{aid}"></a>'
+        return None
 
     for block in blocks:
         # 段落间距控制
@@ -165,6 +182,9 @@ def _render_body(
             lines.append(f"<!-- page: {block.content} -->")
 
         elif block.kind == "heading":
+            anchor = _anchor_line(block)
+            if anchor:
+                lines.append(anchor)
             prefix = "#" * min(block.level, 6)
             lines.append(f"{prefix} {block.content}")
 
@@ -174,6 +194,9 @@ def _render_body(
             lines.append(text)
 
         elif block.kind == "image" or block.kind == "table_image":
+            anchor = _anchor_line(block)
+            if anchor:
+                lines.append(anchor)
             # 复制图片
             if images_source_dir and block.img_src:
                 src_path = images_source_dir / Path(block.img_src).name
@@ -213,12 +236,17 @@ def _render_body(
             lines.append(block.content)
 
         elif block.kind == "reference":
-            lines.append(block.content)
+            anchor = _anchor_line(block)
+            # 锚点标记置于条目首（行内 HTML，与条目同段）
+            lines.append(anchor + block.content if anchor else block.content)
 
         elif block.kind == "table":
             # HTML 表体原样输出（契约 §四：复杂表格用 HTML <table>）；
             # caption 作独立段落置于表前，表前后留空行避免被 CommonMark
             # HTML 块吞掉后续正文
+            anchor = _anchor_line(block)
+            if anchor:
+                lines.append(anchor)
             if block.caption:
                 lines.append(block.caption)
                 lines.append("")

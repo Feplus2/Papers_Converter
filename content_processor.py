@@ -253,6 +253,10 @@ class ProcessedBlock:
         self.img_new_name = kwargs.get("img_new_name", "")  # 重命名后
         self.page_idx = kwargs.get("page_idx", 0)
         self.bbox = kwargs.get("bbox")  # 页面归一化坐标（图组并集重裁用，见 figure_merger）
+        # 源 PDF 页码（0 基；PDF 原生链接注入用，见 link_extractor）。
+        # 与 page_idx 分离：page_idx 只标图片/表格块且有合并语义（_merge_paragraph_fragments
+        # 依赖现状），src_page 是纯溯源属性，不参与任何既有逻辑
+        self.src_page = kwargs.get("src_page")
 
     def __repr__(self):
         return f"<{self.kind}: {self.content[:50]}...>"
@@ -547,13 +551,14 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             else:
                 in_references = False
             # text_level 仅作弱提示；真实层级由 _assign_heading_levels 重建
-            result.append(ProcessedBlock("heading", content=text, level=block["text_level"]))
+            result.append(ProcessedBlock("heading", content=text, level=block["text_level"],
+                                         src_page=page_idx))
             continue
 
         # --- 参考文献 ---
         if block_type == "ref_text" or in_references:
             if text:
-                result.append(ProcessedBlock("reference", content=text))
+                result.append(ProcessedBlock("reference", content=text, src_page=page_idx))
             continue
 
         # --- 公式 ---
@@ -564,7 +569,7 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             eq_text = text
             if not eq_text.startswith("$$"):
                 eq_text = f"$$\n{eq_text}\n$$"
-            result.append(ProcessedBlock("equation", content=eq_text))
+            result.append(ProcessedBlock("equation", content=eq_text, src_page=page_idx))
             continue
 
         # --- 表格 ---
@@ -588,6 +593,7 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                 if body:
                     result.append(ProcessedBlock(
                         "table", content=body, caption=caption, page_idx=page_idx,
+                        src_page=page_idx,
                     ))
                 result.extend(rescued)
             elif block.get("img_path"):
@@ -600,6 +606,7 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                     caption=cap,
                     img_src=block["img_path"],
                     page_idx=page_idx,
+                    src_page=page_idx,
                 ))
             continue
 
@@ -628,9 +635,11 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                 img_new_name="",  # 稍后由 _assign_figure_numbers 填充
                 page_idx=page_idx,
                 bbox=block.get("bbox"),
+                src_page=page_idx,
             ))
             if body_text:
-                result.append(ProcessedBlock("paragraph", content=body_text, page_idx=page_idx))
+                result.append(ProcessedBlock("paragraph", content=body_text,
+                                             page_idx=page_idx, src_page=page_idx))
             continue
 
         # --- 普通文本段落 ---
@@ -647,8 +656,10 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             abstract_match = re.match(r"^(?:abstract|conspectus)[:\.\s]+(.+)", text, re.IGNORECASE | re.DOTALL)
             if abstract_match:
                 # 先插入 Abstract heading
-                result.append(ProcessedBlock("heading", content="Abstract", level=1))
-                result.append(ProcessedBlock("paragraph", content=abstract_match.group(1).strip()))
+                result.append(ProcessedBlock("heading", content="Abstract", level=1,
+                                             src_page=page_idx))
+                result.append(ProcessedBlock("paragraph", content=abstract_match.group(1).strip(),
+                                             src_page=page_idx))
                 continue
             # 中文摘要（"摘 要 ..." / 允许机构行等短前缀粘连："（xx大学...) 摘 要 ..."）
             # 前缀以汉字/字母结尾说明"摘要"在句中（如"本文摘要"），不拆
@@ -657,11 +668,14 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                     and not re.search(r"[A-Za-z0-9\u4e00-\u9fff]$", zh_match.group(1)):
                 prefix = zh_match.group(1).strip()
                 if prefix:
-                    result.append(ProcessedBlock("paragraph", content=prefix))
-                result.append(ProcessedBlock("heading", content="摘要", level=1))
-                result.append(ProcessedBlock("paragraph", content=zh_match.group(3).strip()))
+                    result.append(ProcessedBlock("paragraph", content=prefix,
+                                                 src_page=page_idx))
+                result.append(ProcessedBlock("heading", content="摘要", level=1,
+                                             src_page=page_idx))
+                result.append(ProcessedBlock("paragraph", content=zh_match.group(3).strip(),
+                                             src_page=page_idx))
             else:
-                result.append(ProcessedBlock("paragraph", content=text))
+                result.append(ProcessedBlock("paragraph", content=text, src_page=page_idx))
 
     _ensure_references_heading(result)
     return result
@@ -901,13 +915,15 @@ def _rescue_prose_cells(html_str: str, page_idx: int = 0) -> tuple[str, list]:
             text = unescape(re.sub(r"<[^>]+>", "", cell))
             text = re.sub(r"\s+", " ", text).strip()
             if len(text) >= _PROSE_CELL_MIN and re.search(r"[a-zA-Z]\. [A-Z(]", text):
-                rescued.append(ProcessedBlock("paragraph", content=text, page_idx=page_idx))
+                rescued.append(ProcessedBlock("paragraph", content=text, page_idx=page_idx,
+                                              src_page=page_idx))
                 continue
             attrs = cell[: cell.index(">")]
             m = re.search(r'colspan="(\d+)"', attrs)
             colspan = int(m.group(1)) if m else 1
             if colspan >= 2 and 0 < len(text) < 120 and _DOTTED_NUM_RE.match(text):
-                rescued.append(ProcessedBlock("heading", content=text, level=1, page_idx=page_idx))
+                rescued.append(ProcessedBlock("heading", content=text, level=1, page_idx=page_idx,
+                                              src_page=page_idx))
                 continue
             kept_cells.append(cell)
         if kept_cells:
@@ -1166,7 +1182,7 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
                 prev_para = (b.page_idx, t)
                 continue
             nb = ProcessedBlock("fig_caption_text", content=m.group(2).strip(),
-                                page_idx=b.page_idx)
+                                page_idx=b.page_idx, src_page=getattr(b, "src_page", None))
             nb.fig_num = m.group(1)
             out.append(nb)
             continue
@@ -1191,9 +1207,11 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
             if prefix and not is_reference:
                 if prefix:
                     out.append(ProcessedBlock("paragraph", content=prefix,
-                                              page_idx=b.page_idx))
+                                              page_idx=b.page_idx,
+                                              src_page=getattr(b, "src_page", None)))
                 nb = ProcessedBlock("fig_caption_text", content=m2.group(2).strip(),
-                                    page_idx=b.page_idx)
+                                    page_idx=b.page_idx,
+                                    src_page=getattr(b, "src_page", None))
                 nb.fig_num = m2.group(1)
                 out.append(nb)
                 continue

@@ -58,6 +58,7 @@ def convert_single(
     coord_space: str | None = None,
     emit_finish: bool = True,
     extra_finish_fields: dict | None = None,
+    keep_links: bool | None = None,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -66,7 +67,7 @@ def convert_single(
         parsed_dir: 解析产物目录（含 *_content_list.json + images/）
         output_dir: 输出根目录
         use_llm: 是否使用 LLM 提取元数据
-        source_pdf: 可选，原 PDF 路径（复制为 source.pdf）
+        source_pdf: 可选，原 PDF 路径（复制为 source.pdf；也是原生链接提取源）
         zotero_key: 可选，Zotero key（仅当来自 Zotero 时作为元数据写入）
         reporter: 可选，headless 进度报告器（stage 2/3/4 事件 + done 事件）
         coord_space: 图组并集重裁的坐标空间（随实际解析引擎）
@@ -75,6 +76,8 @@ def convert_single(
             reporter.pending_finish_fields，由 convert_pdf 统一发）
         extra_finish_fields: finish 时并入 done 事件的额外字段（如
             {"incomplete": True, "qc_warnings": [...]}）
+        keep_links: 是否保留 PDF 原生链接（P1，见 link_extractor）；
+            None 时取 config.PDF_LINKS。仅当 source_pdf 存在且有链接注释时生效
 
     Returns:
         paper.md 路径，失败返回 None
@@ -160,6 +163,23 @@ def convert_single(
             f"  最终正文退化检测命中（{quality_guard.describe(final_finding)}），"
             "不阻断输出，done 事件将打标 degenerate")
 
+    # P1 原生链接保留：从源 PDF 提取 link annotations 注入块内容，
+    # 收集被指向的锚点 id 交给渲染器发射（无链接注释 → None → 零副作用输出）
+    if keep_links is None:
+        keep_links = config.PDF_LINKS
+    link_anchors = None
+    if keep_links and source_pdf:
+        try:
+            from link_extractor import collect_paper_links
+            link_res = collect_paper_links(blocks, Path(source_pdf))
+            if link_res is not None:
+                link_anchors = link_res.anchors
+                logger.info(
+                    f"  原生链接: 注入 {link_res.injected} 条，放弃 {link_res.dropped} 条"
+                    f"（锚点 {len(link_anchors)} 个）明细 {link_res.stats}")
+        except Exception as e:
+            logger.warning(f"  原生链接提取失败（保持无链接输出）: {e}")
+
     t4 = time.time()
     if reporter:
         reporter.update_stage(4, "渲染装订", "渲染 Markdown、复制图片与 source.pdf...")
@@ -170,6 +190,7 @@ def convert_single(
         slug=slug,
         source_pdf=source_pdf,
         images_source_dir=images_dir if images_dir.exists() else None,
+        link_anchors=link_anchors,
     )
     if reporter:
         reporter.complete_stage(4, "渲染装订", time.time() - t4)
@@ -320,6 +341,7 @@ def convert_pdf(
     provider_opts: dict | None = None,
     zotero_key: str | None = None,
     headless: bool = False,
+    keep_links: bool | None = None,
 ) -> Path | None:
     """完整管线：PDF → 解析引擎 → Pandoc Markdown。
 
@@ -329,6 +351,7 @@ def convert_pdf(
     zotero_key：批量重解析时传入，元数据走 Zotero 权威并写入 frontmatter。
     headless：开启后进度以 JSON 行打印到 stdout（SageRead sidecar 协议，
     见 progress_headless.py），普通日志仍走 stderr。
+    keep_links：是否保留 PDF 原生链接（P1）；None 取 config.PDF_LINKS。
 
     交付前完整性闸：渲染产物经 qc_severe_findings 检查，图/表断号或整页
     丢失则打回——同引擎重试（至多 MAX_STAGE1_RETRIES 次）→ 降级 MinerU
@@ -420,6 +443,7 @@ def convert_pdf(
         # 像素 / 其他跳过；退化自动降级后产物等同 mineru）
         coord_space=effective_provider_name,
         emit_finish=False,
+        keep_links=keep_links,
     )
     if not reporter or not paper_md:
         return paper_md
@@ -471,7 +495,7 @@ def convert_pdf(
                 staging_dir, output_dir, use_llm=use_llm,
                 source_pdf=pdf_path, zotero_key=zotero_key,
                 reporter=reporter, coord_space=effective_provider_name,
-                emit_finish=False)
+                emit_finish=False, keep_links=keep_links)
             if not paper_md:
                 break
             severe = qc_severe_findings(paper_md, total_pages)
@@ -495,7 +519,7 @@ def convert_pdf(
                     staging_dir, output_dir, use_llm=use_llm,
                     source_pdf=pdf_path, zotero_key=zotero_key,
                     reporter=reporter, coord_space=fb_name,
-                    emit_finish=False)
+                    emit_finish=False, keep_links=keep_links)
                 if not paper_md:
                     break
                 severe = qc_severe_findings(paper_md, total_pages)
@@ -597,6 +621,11 @@ def main():
         help="无界面模式：进度以 JSON 行打印到 stdout（SageRead sidecar 协议），"
              "仅作用于单篇 PDF 转换路径",
     )
+    parser.add_argument(
+        "--no-links",
+        action="store_true",
+        help="不保留 PDF 原生链接（默认启用；关闭后输出与旧版完全一致，A/B 用）",
+    )
 
     args = parser.parse_args()
 
@@ -655,10 +684,12 @@ def main():
                                          ocr=not args.no_ocr,
                                          skip_mineru=args.skip_mineru,
                                          provider_name=args.provider,
-                                         zotero_key=d.name)
+                                         zotero_key=d.name,
+                                         keep_links=not args.no_links)
                 else:
                     result = convert_single(d, output_dir, use_llm=use_llm,
-                                            zotero_key=d.name)
+                                            zotero_key=d.name,
+                                            keep_links=not args.no_links)
                 if result:
                     success += 1
                 else:
@@ -688,7 +719,8 @@ def main():
                                      ocr=not args.no_ocr, skip_mineru=args.skip_mineru,
                                      provider_name=args.provider,
                                      provider_opts=provider_opts,
-                                     headless=args.headless)
+                                     headless=args.headless,
+                                     keep_links=not args.no_links)
             except Exception as e:
                 # headless：栈留 stderr，stdout 发 error 事件后非 0 退出
                 logger.exception("  转换失败")
@@ -698,7 +730,8 @@ def main():
                 sys.exit(1)
         # 情况 2：已解析目录
         elif target_path.is_dir():
-            result = convert_single(target_path, output_dir, use_llm=use_llm)
+            result = convert_single(target_path, output_dir, use_llm=use_llm,
+                                    keep_links=not args.no_links)
         # 情况 3：Zotero key（示例数据源）
         else:
             parsed_dir = config.PARSED_DIR / target
@@ -706,7 +739,8 @@ def main():
                 logger.error(f"未找到解析目录: {parsed_dir}（也不是 PDF 文件）")
                 sys.exit(1)
             result = convert_single(parsed_dir, output_dir, use_llm=use_llm,
-                                    zotero_key=target)
+                                    zotero_key=target,
+                                    keep_links=not args.no_links)
 
         if result:
             logger.info(f"\n  转换成功: {result}")
