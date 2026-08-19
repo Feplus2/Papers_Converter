@@ -46,18 +46,62 @@ def _strip_frontmatter(text: str) -> str:
     return text[m.end():] if m else text
 
 
+# 图表引用提及的外部归属形态（引用的是**别论文**的图/表，不计入内部引用对账；
+# 实证形态：forecast 论文 "following the procedure given in Ref. [55], whose
+# Table 2 or Table 3 provides ..."——该文自身零表注，误报"缺 Table 2/3"）：
+#   - 前缀 whose（whose 从句修饰 Ref. [N]）
+#   - 前缀 "Ref. [55]"/"Refs. [1, 2]"（兼容 [[55](#ref-55)] 链接形态）
+#   - 后接 "of/in Ref." / "of/in [55]"（同样兼容链接形态）
+#   - 并列延续："whose Table 2 or Table 3" 的 Table 3（前缀 or/and 且前一提及
+#     已被判外部归属）
+_EXT_PRE_RES = [
+    re.compile(r"\bwhose\s+$", re.I),
+    re.compile(r"\bRefs?\.?\s*\[+\d+(?:[,\u2013-]\s*\d+)*\]*"
+               r"(?:\]\([^)]*\))?\s*[,;:]?\s*$", re.I),
+]
+_EXT_POST_RE = re.compile(
+    r"^\s*(?:of|in)\s+(?:Refs?\.?\b|\[+\d)", re.I)
+_CHAIN_RE = re.compile(r"(?:or|and)\s*$", re.I)
+_MENTION_RE = re.compile(r"\b(Fig(?:ure)?\.?|Table)\s*(\d+)")
+
+
+def _internal_fig_table_refs(prose: str) -> tuple[set[int], set[int]]:
+    """正文叙述中的内部图/表引用编号集（外部归属形态不计入，宁严勿宽：
+    只排除上述明确形态，"Table 2 shows" 类内部引用照常计入）。"""
+    figs: set[int] = set()
+    tbls: set[int] = set()
+    prev_external = False
+    prev_end = -10**9
+    for m in _MENTION_RE.finditer(prose):
+        pre = prose[max(0, m.start() - 60):m.start()]
+        post = prose[m.end():m.end() + 40]
+        external = (
+            any(p.search(pre) for p in _EXT_PRE_RES)
+            or _EXT_POST_RE.match(post) is not None
+            or (prev_external and m.start() - prev_end < 40
+                and _CHAIN_RE.search(pre))
+        )
+        if external:
+            prev_external = True
+            prev_end = m.end()
+            continue
+        prev_external = False
+        (figs if m.group(1).lower().startswith("fig") else tbls).add(int(m.group(2)))
+    return figs, tbls
+
+
 def _check_fig_table_continuity(body: str) -> list[str]:
     warns = []
     actual_figs = {int(n) for m in _ACTUAL_FIG_RE.finditer(body)
                    for n in (m.group(1) or m.group(2),) if n}
     actual_tbls = {int(m.group(1)) for m in _ACTUAL_TBL_RE.finditer(body)}
-    # 引用集：排除图片行与图注/表注行自身，只统计正文叙述中的引用
+    # 引用集：排除图片行与图注/表注行自身，只统计正文叙述中的引用；
+    # 外部归属提及（"whose Table 2" 等）不算内部引用
     prose = "\n".join(
         ln for ln in body.splitlines()
         if not ln.startswith("![")
         and not re.match(r"^(?:Figure|Fig\.?|Table)\s*\d+(?:\.\d+)*\s*[:.]\s", ln))
-    ref_figs = {int(m.group(1)) for m in re.finditer(r"\bFig(?:ure)?\.?\s*(\d+)", prose)}
-    ref_tbls = {int(m.group(1)) for m in re.finditer(r"\bTable\s*(\d+)", prose)}
+    ref_figs, ref_tbls = _internal_fig_table_refs(prose)
 
     def gaps(actual: set[int], referenced: set[int], label: str) -> list[str]:
         out = []
