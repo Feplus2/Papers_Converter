@@ -569,6 +569,121 @@ class TestCitationClusters(unittest.TestCase):
         Path(path).unlink()
 
 
+class TestPublisherDests(unittest.TestCase):
+    """出版商书签式 named dest（Elsevier bib/fig/tbl/eqn、RSC bm_*）映射。"""
+
+    def _run(self, page0_text, link_specs, blocks):
+        """link_specs: [(源文字, dest_name)]；dest_page=-1 → 同号唯一兜底解析。"""
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 100), page0_text, fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        links = []
+        for txt, dest in link_specs:
+            c0 = pages[0].raw.find(txt)
+            self.assertGreaterEqual(c0, 0, f"{txt!r} 不在页文本里")
+            links.append(le._Link(0, c0, c0 + len(txt), txt, dest_name=dest))
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        return res
+
+    def test_elsevier_bib_fig_tbl_eqn(self):
+        text = "See 3 and Fig. 2 and Table 4 and Equation 1 here."
+        blocks = [
+            ProcessedBlock("paragraph", content=text, src_page=0),
+            ProcessedBlock("reference", content="[3] X. Author, T.", src_page=0),
+            ProcessedBlock("image", content="Figure 2: A plot.",
+                           img_new_name="fig2.jpg", src_page=0),
+            ProcessedBlock("table_image", content="Table 4: Data.",
+                           img_new_name="table1.png", src_page=0),
+            ProcessedBlock("equation", content="$$\ny = x \\tag{1}\n$$", src_page=0),
+        ]
+        res = self._run(text, [("3", "bib0003"), ("Fig. 2", "fig0002"),
+                               ("Table 4", "tbl4"), ("Equation 1", "eqn0001")],
+                        blocks)
+        self.assertEqual(
+            blocks[0].content,
+            "See [3](#ref-3) and [Fig. 2](#fig-2) and [Table 4](#tab-4) "
+            "and [Equation 1](#eq-1) here.")
+        self.assertEqual(res.stats.get("ref"), [1, 0])
+        self.assertEqual(res.stats.get("fig"), [1, 0])
+        self.assertEqual(res.stats.get("tab"), [1, 0])
+        self.assertEqual(res.stats.get("eq"), [1, 0])
+
+    def test_prefixed_uppercase_dest(self):
+        # ernst 风格 MAC11592BIB59：前缀大写词干同样识别
+        text = "Earlier work [7]. reports."
+        blocks = [
+            ProcessedBlock("paragraph", content=text, src_page=0),
+            ProcessedBlock("reference", content="[7] Y. Author, U.", src_page=0),
+        ]
+        res = self._run(text, [("[7].", "MAC11592BIB7")], blocks)
+        self.assertEqual(blocks[0].content,
+                         "Earlier work [[7].](#ref-7) reports.")
+
+    def test_dest_text_number_mismatch_dropped(self):
+        text = "See 3 here."
+        blocks = [
+            ProcessedBlock("paragraph", content=text, src_page=0),
+            ProcessedBlock("reference", content="[9] X. Author, T.", src_page=0),
+        ]
+        res = self._run(text, [("3", "bib0009")], blocks)
+        self.assertEqual(blocks[0].content, "See 3 here.")
+        self.assertEqual(res.stats.get("ref"), [0, 1])
+
+    def test_supplementary_dest_skipped(self):
+        text = "Data 1 here."
+        blocks = [ProcessedBlock("paragraph", content=text, src_page=0)]
+        res = self._run(text, [("1", "bm_MOESM1")], blocks)
+        self.assertEqual(blocks[0].content, "Data 1 here.")
+        self.assertEqual(res.stats.get("other"), [0, 1])
+
+    def test_superscript_cite_unique_fallback(self):
+        # RSC 式上标引文：PDF 是裸数字上标，块内 "[5]" 的括号是引擎归一产物，
+        # 字符级对齐必败 → 唯一出现兜底落位
+        text = "Grid scale storage 5 is key."
+        blocks = [
+            ProcessedBlock("paragraph", content="Grid scale storage [5] is key.",
+                           src_page=0),
+            ProcessedBlock("reference", content="[5] X. Author, T.", src_page=1),
+        ]
+        res = self._run(text, [("5", "bm_CR5")], blocks)
+        self.assertEqual(blocks[0].content,
+                         "Grid scale storage [[5]](#ref-5) is key.")
+        self.assertEqual(res.stats.get("ref"), [1, 0])
+
+    def test_superscript_cite_ambiguous_dropped(self):
+        # 同页两个 [5] 出现位置，落位多义 → 维持放弃
+        text = "Storage 5 and later 5 again."
+        blocks = [
+            ProcessedBlock("paragraph",
+                           content="Storage [5] and later [5] again.", src_page=0),
+            ProcessedBlock("reference", content="[5] X. Author, T.", src_page=1),
+        ]
+        res = self._run(text, [("5", "bm_CR5")], blocks)
+        self.assertEqual(blocks[0].content, "Storage [5] and later [5] again.")
+        self.assertEqual(res.stats.get("ref"), [0, 1])
+
+    def test_parse_dest_string(self):
+        self.assertEqual(le._parse_dest_string("/FitR 0 446 596 437", 800.0),
+                         (298.0, 358.5))
+        self.assertEqual(le._parse_dest_string("/XYZ 32 748 0", 800.0),
+                         (32.0, 52.0))
+        self.assertEqual(le._parse_dest_string("/FitH 100", 800.0), (0.0, 700.0))
+        self.assertIsNone(le._parse_dest_string("/Fit", 800.0))
+        self.assertIsNone(le._parse_dest_string("", 800.0))
+
+
 class TestRenderAnchors(unittest.TestCase):
     def test_anchor_emission(self):
         blocks = [

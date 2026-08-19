@@ -225,6 +225,17 @@ def _raw_to_skel(page: _Page, raw_idx: int, forward: bool) -> int | None:
     return None
 
 
+# 出版商书签式 named dest：尾部词干+编号（Elsevier bib0001/FIG23/TBL1/eqn0001、
+# RSC bm_CR1/bm_Fig1/bm_Equ1 等；aff/fn/cor/MOESM 等非正文目标不匹配此式，仍放弃）
+_PUB_DEST_RE = re.compile(
+    r"(bib|bibr|refs?|fig|tbl|tab|eqn|equ?|cr)s?0*(\d+)$", re.I)
+_PUB_DEST_CAT = {
+    "bib": "ref", "bibr": "ref", "ref": "ref", "refs": "ref", "cr": "ref",
+    "fig": "fig", "tbl": "tab", "tab": "tab",
+    "eqn": "eq", "eq": "eq", "equ": "eq",
+}
+
+
 def _brackets_balanced(text: str) -> bool:
     """方括号是否平衡（Markdown 链接显示文字的要求；深度不为负且归零）。"""
     depth = 0
@@ -377,6 +388,58 @@ def _merge_citation_clusters(links: list, pages: list) -> list:
     return links
 
 
+def _parse_dest_string(dest: str, page_height: float) -> tuple[float, float] | None:
+    """解析 named dest 的目标串（'/FitR 0 446 596 437'、'/XYZ 32 748 0' 等），
+    返回 fitz 坐标系（左上原点）下的目标点；不支持的形式 → None。
+
+    PDF dest 串是左下原点用户空间坐标，y 需按页高翻转。
+    """
+    try:
+        parts = dest.split()
+        kind = parts[0]
+        vals = [float(v) for v in parts[1:] if re.match(r"^-?[\d.]+$", v)]
+        if kind == "/XYZ" and len(vals) >= 2:
+            return vals[0], page_height - vals[1]
+        if kind == "/FitH" and vals:
+            return 0.0, page_height - vals[0]
+        if kind == "/FitR" and len(vals) >= 4:
+            return (vals[0] + vals[2]) / 2, page_height - (vals[1] + vals[3]) / 2
+    except (ValueError, IndexError):
+        pass
+    return None  # /Fit /FitB /FitBH 等无确定目标点，交由同号唯一兜底
+
+
+def _place_unique_citation(lk: _Link, num: str, blocks: list,
+                           math_spans: dict):
+    """上标引文兜底落位：源页候选块内 "[num]" 恰好唯一出现 → (块下标, o0, o1)；
+    零次/多次/命中数学段 → None（维持放弃）。"""
+    needle = f"[{num}]"
+    hits = []
+    for idx, b in enumerate(blocks):
+        if b.kind not in _INJECTABLE_KINDS:
+            continue
+        if getattr(b, "src_page", None) not in (lk.page, lk.page - 1):
+            continue
+        start = 0
+        while True:
+            j = (b.content or "").find(needle, start)
+            if j < 0:
+                break
+            hits.append((idx, j, j + len(needle)))
+            start = j + 1
+    if len(hits) != 1:
+        return None
+    idx, o0, o1 = hits[0]
+    spans = math_spans.get(idx)
+    if spans is None:
+        spans = [(m.start(), m.end())
+                 for m in _MATH_SPAN_RE.finditer(blocks[idx].content)]
+        math_spans[idx] = spans
+    if any(o0 < e and o1 > s for s, e in spans):
+        return None
+    return idx, o0, o1
+
+
 def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
     """提取 PDF 链接注释。返回 (pages, links)；无链接注释/打开失败 → None。
 
@@ -418,15 +481,26 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
                     to = lk.get("to")
                     if to is not None:
                         dest_x, dest_y = to.x, to.y
-                    if dest_page < 0 and kind == fitz.LINK_NAMED and dest_name:
-                        # 链接未自带目标 → resolve_names() 解析；失败则放弃
+                    if kind == fitz.LINK_NAMED and dest_name \
+                            and (dest_page < 0 or to is None):
+                        # 页码或坐标缺失 → resolve_names() 补（书签式 dest 的
+                        # '/FitR x0 y0 x1 y1' 串也解析出目标点）；页码仍缺则放弃
                         nm = names.get(dest_name)
-                        if not nm or nm.get("page", -1) < 0:
-                            continue
-                        dest_page = nm["page"]
-                        to = nm.get("to")
-                        if to is not None:
-                            dest_x, dest_y = to.x, to.y
+                        if nm:
+                            if dest_page < 0:
+                                dest_page = nm.get("page", -1)
+                            if to is None:
+                                to2 = nm.get("to")
+                                if to2 is not None:
+                                    dest_x, dest_y = to2.x, to2.y
+                                elif 0 <= dest_page < doc.page_count:
+                                    pt = _parse_dest_string(
+                                        nm.get("dest") or "",
+                                        doc[dest_page].rect.height)
+                                    if pt is not None:
+                                        dest_x, dest_y = pt
+                        if dest_page < 0:
+                            continue  # 页码解析失败，放弃该条（保纯文本）
                     if not (0 <= dest_page < doc.page_count):
                         continue
                 else:
@@ -767,7 +841,24 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                 return "#" + block_anchor_id(blocks[cands[0]]), "sec"
             return None, "sec"
         if dest:
-            return None, "other"  # 未识别的 named dest 类型，不猜
+            # 出版商书签式 dest（Elsevier/RSC 等）：词干定类别、尾部编号即
+            # 印刷编号（与 hyperref 计数器不同，可与源文字编号交叉校验）
+            m = _PUB_DEST_RE.search(dest)
+            if not m:
+                return None, "other"  # 未识别的 named dest 类型，不猜
+            cat = _PUB_DEST_CAT[m.group(1).lower()]
+            num = m.group(2)
+            tm = _NUM_TEXT_RE.search(text)
+            if tm is None or tm.group(1) != num:
+                return None, cat  # 源文字编号与 dest 编号对不上 → 放弃
+            idx = _target_block(lk)
+            if idx is not None and block_anchor_id(blocks[idx]) == f"{cat}-{num}":
+                return f"#{cat}-{num}", cat
+            cands = {"ref": ref_index, "fig": fig_index,
+                     "tab": tab_index, "eq": eq_index}[cat].get(num, [])
+            if len(cands) == 1:
+                return f"#{cat}-{num}", cat
+            return None, cat
 
         # LINK_GOTO（无 nameddest）：只能靠源文字形态分类 + 位置映射校验
         if m_cite and text.startswith("["):
@@ -866,6 +957,15 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             break
         # 目标映射 + 校验（URI 白名单兜底要看落在哪种块里）
         target, cat = _resolve(lk, blocks[placed[0]].kind if placed else None)
+        if placed is None and target is not None and cat == "ref" \
+                and (lk.dest_name.startswith("cite.")
+                     or bool(_PUB_DEST_RE.search(lk.dest_name or ""))):
+            # 上标引文兜底落位：RSC 式上标数字引文，PDF 是裸数字上标而块内
+            # "[N]" 的括号是引擎归一产物，字符级对齐必然失败。此时目标已由
+            # 原生 dest 确定（非编造），只需在源页候选块里找 "[N]" 的
+            # 唯一出现位置落位；多义（同页多处 [N]）维持放弃
+            num = target.split("-", 1)[1]
+            placed = _place_unique_citation(lk, num, blocks, math_spans)
         if lk.cluster >= 0:
             # 簇部分矩形：暂缓提交，主循环后整组判定（全解析成功且落同一块）
             cluster_pending.setdefault(lk.cluster, []).append((placed, target, cat))
