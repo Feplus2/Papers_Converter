@@ -362,6 +362,32 @@ def _degenerate_fallback_parse(provider, provider_opts: dict | None, pdf_path: s
     return True
 
 
+def _sniff_coord_space(staging_dir: Path) -> str | None:
+    """从 staging content_list 的 bbox 数值范围嗅探坐标空间。
+
+    MinerU 产物是 0-1000 归一化坐标；PaddleOCR 是 144DPI 像素（页宽上千）。
+    无法判定时返回 None（调用方维持原值）。
+    """
+    cl_files = list(Path(staging_dir).glob("*_content_list.json"))
+    if not cl_files:
+        return None
+    try:
+        with open(cl_files[0], "r", encoding="utf-8") as f:
+            content_list = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    max_v = 0.0
+    for b in content_list:
+        bb = b.get("bbox")
+        if bb:
+            max_v = max(max_v, *(float(v) for v in bb))
+    if max_v > 1001:
+        return "paddleocr"
+    if max_v > 0:
+        return "mineru"
+    return None
+
+
 def convert_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -460,6 +486,16 @@ def convert_pdf(
             reporter.complete_stage(1, provider.name, time.time() - t1)
     else:
         logger.info(f"  跳过解析，复用已有产物: {staging_dir}")
+        # 复用 staging 时 provider 旗标可能与实际解析引擎不一致（默认引擎跑
+        # 别家产物），坐标空间错配会让图组并集的版式守卫失效——blanco 实测
+        # paddleocr 空间解读 mineru staging 致 fig5/fig6 被误并丢图。
+        # 以 staging  bbox 数值范围嗅探的实际空间为准
+        sniffed = _sniff_coord_space(staging_dir)
+        if sniffed and sniffed != effective_provider_name:
+            logger.warning(
+                f"  staging 坐标空间嗅探为 {sniffed}"
+                f"（--provider 为 {effective_provider_name}），以嗅探为准")
+            effective_provider_name = sniffed
         if reporter:
             reporter.update_stage(1, provider.name, "复用已有解析产物")
             reporter.complete_stage(1, provider.name, 0.0)

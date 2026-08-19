@@ -1,6 +1,11 @@
 """content_processor 修复单测：多图注粘连拆分（任务2）+ 文献区混入正文段重定位（任务3）。"""
 
+import os
+import tempfile
 import unittest
+from pathlib import Path
+
+import fitz
 
 from content_processor import (
     ProcessedBlock,
@@ -112,6 +117,76 @@ class TestReferenceRelocation(unittest.TestCase):
         ]
         out = _relocate_stray_reference_paragraphs(blocks)
         self.assertEqual(out[1].content, "Short note.")
+
+
+class TestFigureMergeGuards(unittest.TestCase):
+    """figure_merger 编号守卫 + pipeline 坐标空间嗅探（blanco 劣化事故根修）。"""
+
+    def _two_fig_blocks(self, cap5, cap6):
+        b1 = ProcessedBlock("image", content=cap5, caption=cap5,
+                            img_src="images/a.jpg", img_new_name="fig5.jpg",
+                            page_idx=0, bbox=[100, 100, 900, 480])
+        b2 = ProcessedBlock("image", content=cap6, caption=cap6,
+                            img_src="images/b.jpg", img_new_name="fig6.jpg",
+                            page_idx=0, bbox=[150, 620, 850, 950])
+        return [b1, b2]
+
+    def _blank_pdf(self, td):
+        doc = fitz.open()
+        doc.new_page(width=612, height=792)
+        path = Path(td) / "t.pdf"
+        doc.save(path)
+        doc.close()
+        return path
+
+    def test_distinct_figure_numbers_never_merge(self):
+        # 同页两个不同编号的独立图：任何坐标空间（含错配的 paddleocr）都不得并。
+        # 用 blanco 事故原形：content 带 "Figure N:" 前缀但 caption 是裸图注
+        # （_REAL_CAPTION_RE 组界判定读 caption 优先，裸图注不命中 → 会成组，
+        # 此时只有编号守卫拦得住）
+        import figure_merger
+        with tempfile.TemporaryDirectory() as td:
+            pdf = self._blank_pdf(td)
+            b1, b2 = self._two_fig_blocks("Figure 5: " + "x" * 60,
+                                          "Figure 6: " + "y" * 60)
+            b1.caption = "The mass and momentum spectrum " + "x" * 40
+            b2.caption = "The momentum distribution " + "y" * 40
+            n = figure_merger.merge_split_figures(
+                [b1, b2], pdf, Path(td), coord_space="paddleocr")
+            self.assertEqual(n, 0)
+            self.assertEqual(len([b1, b2]), 2)
+
+    def test_same_number_panels_still_merge(self):
+        # 同号子图（Figure 5 / Figure 5 (a)）编号守卫放行，照常整幅重裁
+        import figure_merger
+        with tempfile.TemporaryDirectory() as td:
+            pdf = self._blank_pdf(td)
+            blocks = self._two_fig_blocks("Figure 5 (a)", "Figure 5: " + "y" * 60)
+            blocks[0].img_new_name = "fig5a.jpg"
+            blocks[1].img_new_name = "fig5.jpg"
+            n = figure_merger.merge_split_figures(
+                blocks, pdf, Path(td), coord_space="paddleocr")
+            self.assertEqual(n, 1)
+            survivors = [b for b in blocks if b.kind == "image"]
+            self.assertEqual(len(survivors), 1)
+            self.assertIn("_merged", survivors[0].img_src)
+
+    def test_sniff_coord_space(self):
+        import json
+        from pipeline import _sniff_coord_space
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "st"
+            d.mkdir()
+            (d / "x_content_list.json").write_text(json.dumps(
+                [{"type": "text", "text": "t", "bbox": [90, 144, 366, 880]}]),
+                encoding="utf-8")
+            self.assertEqual(_sniff_coord_space(d), "mineru")
+            (d / "x_content_list.json").write_text(json.dumps(
+                [{"type": "text", "text": "t", "bbox": [180, 288, 1224, 1584]}]),
+                encoding="utf-8")
+            self.assertEqual(_sniff_coord_space(d), "paddleocr")
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(_sniff_coord_space(Path(td)))
 
 
 if __name__ == "__main__":

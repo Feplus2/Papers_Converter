@@ -1468,8 +1468,11 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
                 for (n_i, cap_i), b in zip(parts, imgs):
                     ext = Path(b.img_src).suffix if b.img_src else ".png"
                     b.img_new_name = _unique(f"{fig_stem(n_i)}{ext}")
-                    b.caption = cap_i
-                    b.content = f"Figure {n_i}: {cap_i}" if cap_i else f"Figure {n_i}"
+                    # caption 带 "Figure N:" 前缀（与正常主图块形态一致——
+                    # figure_merger 的真图注组界判定靠它识别，裸图注会被
+                    # 当无注碎片误并，blanco 实测）
+                    b.caption = f"Figure {n_i}: {cap_i}" if cap_i else f"Figure {n_i}"
+                    b.content = b.caption
                 logger.info(
                     f"  图注粘连拆分: Figure {[p[0] for p in parts]}（{len(imgs)} 图）")
                 continue

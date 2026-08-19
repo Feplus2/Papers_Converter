@@ -133,6 +133,18 @@ def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, coord_spa
             if len(pages) != 1:
                 logger.info(f"  图组跨页 {sorted(pages)}，保持原样")
                 continue
+            # 编号守卫：成员带 ≥2 个不同真实图编号（Figure 5/Figure 6）说明是
+            # 同页相邻的独立图而非一图碎片，任何坐标空间下都不得并
+            # （blanco 实测：坐标空间错配时纵向跨度守卫失效，此守卫兜底）
+            nums = set()
+            for b in members:
+                m = re.match(r"^\s*Figure\s+(\d+(?:\.\d+)*)",
+                             (b.content or "").strip())
+                if m:
+                    nums.add(m.group(1))
+            if len(nums) > 1:
+                logger.info(f"  图组含多个图编号 {sorted(nums)}，独立图不并，保持原样")
+                continue
             page = doc[members[0].page_idx]
 
             union = None
