@@ -170,10 +170,13 @@ def _render_body(
         if block.kind in ("heading", "page_anchor") and prev_kind and prev_kind != "page_anchor":
             lines.append("")
         elif block.kind == "paragraph" and prev_kind in (
-                "paragraph", "reference", "table", "image", "table_image"):
+                "paragraph", "reference", "table", "image", "table_image", "footnote"):
             lines.append("")
         elif block.kind == "reference" and prev_kind:
             # 每条引用各自成段（连续裸行会被 CommonMark 软换行合并成一个巨型段落）
+            lines.append("")
+        elif block.kind == "footnote" and prev_kind:
+            # 页脚注独立成段（与普通段落同形态，避免与正文软换行粘连）
             lines.append("")
         elif block.kind in ("image", "equation", "table", "table_image") and prev_kind:
             lines.append("")
@@ -190,6 +193,11 @@ def _render_body(
 
         elif block.kind == "paragraph":
             # 单行书写
+            text = block.content.replace("\n", " ").strip()
+            lines.append(text)
+
+        elif block.kind == "footnote":
+            # 页脚注：普通段落形态输出（文本零丢失红线，见 content_processor）
             text = block.content.replace("\n", " ").strip()
             lines.append(text)
 

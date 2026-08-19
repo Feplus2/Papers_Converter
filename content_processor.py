@@ -94,6 +94,15 @@ def _normalize_citation_sup(text: str) -> str:
     return _CITATION_SUP_DANGLING_RE.sub(r"[\1]", text)
 
 
+# 引文簇被引擎误判为行内公式（$[2, 3]$ / $[4–8]$ / $[15, 19–22]$）：纯引文形态的
+# $...$ 拆掉 $ 壳还原为文本。数学段内不注入链接是硬规则，不拆壳这些引文永远
+# 无法成链（宇宙弦 Introduction 密集引用区实测整片 $[N]$ 形态）。
+# 已知残余风险：区间记法 $[0,1]$ 与引文同形会被一并拆壳——可见文本不变，
+# 仅失去数学样式，且此类区间在正文中通常不带链接注释，影响可控
+_CITATION_MATH_RE = re.compile(
+    r"\$\s*(\[\d+(?:\s*[,\u2013\u2014;-]\s*\d+)*\])\s*\$")
+
+
 def _normalize_inline(text: str) -> str:
     r"""归一化 MinerU 文本中的内联 HTML 与特殊空白。
 
@@ -115,6 +124,8 @@ def _normalize_inline(text: str) -> str:
     # 含上一条 <sup>[n]</sup> → "$^{[n]}$" 的转换结果，两条路径殊途同归；
     # 兼容子标签引文（"$^{[13b]}$"）、收尾空格（"$^{[42]} $"）与 GB/T 标记（"$^{[J]}$"）
     text = _normalize_citation_sup(text)
+    # 引文簇误判为行内公式（"$[2, 3]$"）拆 $ 壳（见 _CITATION_MATH_RE 注释）
+    text = _CITATION_MATH_RE.sub(r"\1", text)
     if "\xa0" in text:
         text = text.replace("\xa0", " ")
     return text
@@ -279,16 +290,14 @@ def process_content(content_list: list[dict], images_dir: str = "",
     # Step 1: 检测并跳过封面页（只可能判 page 0，判定依据带日志，见 cover_detect）
     cover_pages = detect_cover_pages(content_list, title=title)
 
-    # Step 2: 过滤噪声块
+    # Step 2: 过滤噪声块（page_footnote 不再丢弃——作者单位/正文脚注是正文
+    # 一部分，丢失违反文本零丢失红线；在 _build_ir 里落成独立 footnote 块）
     filtered = []
     for block in content_list:
         page_idx = block.get("page_idx", 0)
         if page_idx in cover_pages:
             continue
         if block["type"] in _NOISE_TYPES:
-            continue
-        # 跳过 page_footnote（通常是作者信息脚注，已提取到 metadata）
-        if block["type"] == "page_footnote":
             continue
         filtered.append(block)
 
@@ -553,6 +562,15 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             # text_level 仅作弱提示；真实层级由 _assign_heading_levels 重建
             result.append(ProcessedBlock("heading", content=text, level=block["text_level"],
                                          src_page=page_idx))
+            continue
+
+        # --- 页脚注（作者单位/正文脚注） ---
+        # 落成独立 footnote 块：不参与段落合并（页底注释与正文拼读会串文），
+        # 渲染为普通段落（renderer 按段落形态输出），位置保持在阅读流原位
+        if block_type == "page_footnote":
+            if text:
+                result.append(ProcessedBlock("footnote", content=text,
+                                             src_page=page_idx))
             continue
 
         # --- 参考文献 ---
@@ -1557,7 +1575,7 @@ def _merge_paragraph_fragments(blocks: list[ProcessedBlock]) -> list[ProcessedBl
             gap_block = False
             continue
         result.append(block)
-        if block.kind in ("heading", "equation", "reference"):
+        if block.kind in ("heading", "equation", "reference", "footnote"):
             last_para_idx = None
             gap_block = False
         elif block.kind in ("image", "table", "table_image") and last_para_idx is not None:

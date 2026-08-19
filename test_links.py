@@ -13,7 +13,8 @@ from pathlib import Path
 
 import fitz
 
-from content_processor import ProcessedBlock
+import link_extractor as le
+from content_processor import ProcessedBlock, process_content
 from link_extractor import (
     _skeletonize,
     block_anchor_id,
@@ -384,6 +385,188 @@ class TestExtractAndInject(unittest.TestCase):
         self.assertEqual(res.injected, 0)
         self.assertEqual(res.dropped, 1)
         pdf.unlink()
+
+
+class TestCitationMathUnwrap(unittest.TestCase):
+    """引文簇误判行内公式拆 $ 壳（$[2, 3]$ → [2, 3]；真数学段不动）。"""
+
+    def test_unwrap_cluster(self):
+        from content_processor import _normalize_inline
+        self.assertEqual(_normalize_inline("see $[2, 3]$ for a review"),
+                         "see [2, 3] for a review")
+        self.assertEqual(_normalize_inline("scenarios $[4\u20138]$ --- are"),
+                         "scenarios [4\u20138] --- are")
+        self.assertEqual(_normalize_inline("$[15, 19\u201322]$"), "[15, 19\u201322]")
+
+    def test_real_math_untouched(self):
+        from content_processor import _normalize_inline
+        self.assertEqual(_normalize_inline("energy $E = [5] exactly$ rises"),
+                         "energy $E = [5] exactly$ rises")
+        self.assertEqual(_normalize_inline("value $x_1$ here"), "value $x_1$ here")
+
+    def test_unwrapped_cluster_injectable(self):
+        # 拆壳后簇链接按原始映射逐数字成链（此前被数学段规则整体 veto）。
+        # 真实场景是 hyperref 的 cite.* named dest（数字紧贴矩形），
+        # 用合成 named 链接注入（dest_page=-1 → 同号唯一条目兜底解析）
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 100), "See [2, 3] for a review.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        links = []
+        for digit, dest in (("2", "cite.a"), ("3", "cite.b")):
+            c0 = pages[0].raw.find(digit)
+            links.append(le._Link(0, c0, c0 + 1, digit, dest_name=dest))
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [
+            ProcessedBlock("paragraph", content="See [2, 3] for a review.", src_page=0),
+            ProcessedBlock("reference", content="[2] X. Author, T.", src_page=0),
+            ProcessedBlock("reference", content="[3] Y. Author, U.", src_page=0),
+        ]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "See [[2](#ref-2), [3](#ref-3)] for a review.")
+        self.assertEqual(res.stats.get("ref"), [2, 0])
+
+
+class TestFootnotePreserved(unittest.TestCase):
+    """page_footnote 不再丢弃（文本零丢失红线）：落成独立 footnote 块、
+    不参与段落合并、渲染为普通段落。"""
+
+    def test_footnote_block_survives(self):
+        cl = [
+            {"type": "text", "text": "We derive analytical approximations",
+             "page_idx": 0},
+            {"type": "page_footnote",
+             "text": "\\* Electronic address: sergei@astro.up.pt", "page_idx": 0},
+            {"type": "text", "text": "for the full model here.", "page_idx": 0},
+        ]
+        from content_processor import process_content
+        blocks = process_content(cl, use_llm=False, title="Cosmic strings")
+        kinds = [b.kind for b in blocks]
+        self.assertIn("footnote", kinds)
+        fn = blocks[kinds.index("footnote")]
+        self.assertIn("Electronic address", fn.content)
+        self.assertEqual(fn.src_page, 0)
+        # 段落合并不把脚注粘进正文（正文两段被脚注隔开，各自独立）
+        paras = [b for b in blocks if b.kind == "paragraph"]
+        self.assertFalse(any("Electronic address" in b.content for b in paras))
+
+    def test_footnote_renders(self):
+        blocks = [
+            ProcessedBlock("paragraph", content="Body text."),
+            ProcessedBlock("footnote",
+                           content="* Electronic address: sergei@astro.up.pt"),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            md = render_paper(
+                blocks=blocks,
+                metadata={"title": "T", "author": [{"name": "A"}], "date": "2024"},
+                output_dir=Path(td), slug="t")
+            text = md.read_text(encoding="utf-8")
+        self.assertIn("Electronic address: sergei@astro.up.pt", text)
+
+    def test_footnote_uri_injectable(self):
+        pdf = _make_pdf([
+            {"texts": [(72, 100, "Contact sergei@astro.up.pt anytime.")],
+             "links": [{"kind": fitz.LINK_URI, "from_text": "sergei@astro.up.pt",
+                        "uri": "mailto:sergei@astro.up.pt"}]},
+        ])
+        blocks = [ProcessedBlock(
+            "footnote", content="Contact sergei@astro.up.pt anytime.", src_page=0)]
+        res = collect_paper_links(blocks, pdf)
+        self.assertEqual(
+            blocks[0].content,
+            "Contact [sergei@astro.up.pt](mailto:sergei@astro.up.pt) anytime.")
+        pdf.unlink()
+
+
+class TestCitationClusters(unittest.TestCase):
+    """引文簇/区间部分矩形合并（monkeypatch 提取层注入合成的 cite.* 链接）。"""
+
+    def _run(self, page0_text, part_specs, blocks):
+        """part_specs: [(部分文字, dest_name)]；返回 (LinkResult, blocks)。"""
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 100), page0_text, fontsize=11)
+        doc.new_page().insert_text((72, 100), "refs", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[i]) for i in range(doc.page_count)]
+        links = []
+        for part, dest in part_specs:
+            c0 = pages[0].raw.find(part)
+            self.assertGreaterEqual(c0, 0, f"{part!r} 不在页文本里")
+            links.append(le._Link(0, c0, c0 + len(part), part,
+                                  dest_name=dest))  # dest_page=-1 → 走同号唯一兜底
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        return res
+
+    def _blocks(self, para_text, ref_nums=(2, 3, 4, 8)):
+        bl = [ProcessedBlock("paragraph", content=para_text, src_page=0),
+              ProcessedBlock("heading", content="References", src_page=1)]
+        for n in ref_nums:
+            bl.append(ProcessedBlock("reference",
+                                     content=f"[{n}] X. Author, T.", src_page=1))
+        return bl
+
+    def test_cluster_and_range_merged(self):
+        text = "Recent work [2, 3] and [4-8] shows."
+        blocks = self._blocks(text)
+        res = self._run(text, [("[2,", "cite.a"), ("3]", "cite.b"),
+                               ("[4-", "cite.c"), ("-8]", "cite.d")], blocks)
+        self.assertEqual(
+            blocks[0].content,
+            "Recent work [[2](#ref-2), [3](#ref-3)] and "
+            "[[4](#ref-4)-[8](#ref-8)] shows.")
+        self.assertEqual(res.stats.get("ref"), [4, 0])
+
+    def test_cluster_rollback_when_member_unresolvable(self):
+        # 成员 9 无对应条目 → 整组放弃（含本可单独成立的 [2）
+        text = "Recent work [2, 9] shows."
+        blocks = self._blocks(text, ref_nums=(2,))
+        res = self._run(text, [("[2,", "cite.a"), ("9]", "cite.b")], blocks)
+        self.assertEqual(blocks[0].content, text)
+        self.assertEqual(res.stats.get("ref"), [0, 2])
+
+    def test_no_false_merge_across_lines(self):
+        # 两个部分矩形不在同一行（y 差超阈值）→ 不合并，各自维持放弃
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 100), "First line [2, ends.", fontsize=11)
+        page = doc.load_page(0)
+        page.insert_text((72, 200), "Second line 3] here.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0a = pages[0].raw.find("[2,")
+        c0b = pages[0].raw.find("3]")
+        links = [le._Link(0, c0a, c0a + 3, "[2,", dest_name="cite.a"),
+                 le._Link(0, c0b, c0b + 2, "3]", dest_name="cite.b")]
+        merged = le._merge_citation_clusters(links, pages)
+        self.assertTrue(all(lk.cluster < 0 for lk in merged))
+        doc.close()
+        Path(path).unlink()
 
 
 class TestRenderAnchors(unittest.TestCase):

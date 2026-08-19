@@ -238,6 +238,20 @@ def _brackets_balanced(text: str) -> bool:
     return depth == 0
 
 
+# 完整引文簇形态：[2, 3] / [4–8] / [15, 19–22]（分隔符逗号/连字符/短横线）
+_CLUSTER_FULL_RE = re.compile(
+    r"^\[\d+(?:\s*[,\u2013\u2014-]\s*\d+)*\]$")
+# 簇部分矩形的源文字形态：数字 + 至多一个括号/逗号/短横线前后缀（"[2," / "3]" /
+# "[4–" / "–8]" / "19–"），纯数字（上标引文伪影）也可作候选——拼接校验会拦住
+_CLUSTER_PART_RE = re.compile(
+    r"^[\[\],\u2013\u2014-]?\s*\d{1,4}\s*[\[\],\u2013\u2014-]?$")
+# 簇合并的 x 向间隙上限（实测 hyperref 拆分间隙 3–7pt；下限允许约一字符宽
+# 的矩形重叠——"[4–"+"–8]" 的短横线字符常被相邻两矩形共享）与行心 y 差上限
+_CLUSTER_X_GAP_PT = 10.0
+_CLUSTER_X_OVERLAP_PT = 6.0
+_CLUSTER_Y_TOL_PT = 2.5
+
+
 # span_for_rect：链接矩形 → raw 字符区间 [c0, c1)（字符中心点落入矩形）
 def _span_for_rect(page: _Page, rect) -> tuple[int, int] | None:
     hit = [i for i, r in enumerate(page.char_rects)
@@ -267,6 +281,7 @@ class _Link:
     dest_x: float = 0.0
     dest_y: float = 0.0
     dest_name: str = ""     # nameddest（cite.* / figure.N / section* / ...）
+    cluster: int = -1       # 引文簇组号（≥0 时为簇部分矩形，须整组同块注入）
 
 
 @dataclass
@@ -275,6 +290,91 @@ class LinkResult:
     injected: int = 0
     dropped: int = 0
     stats: dict = field(default_factory=dict)  # 类别 -> [注入数, 放弃数]
+
+
+def _link_rect(page: _Page, lk: _Link):
+    """链接源区间的字符 bbox 并集（x0, y0, x1, y1；仅用于簇邻近判定）。"""
+    rects = [page.char_rects[page.raw2char[i]]
+             for i in range(lk.c0, lk.c1)
+             if 0 <= i < len(page.raw2char) and page.raw2char[i] >= 0]
+    if not rects:
+        return None
+    return (min(r.x0 for r in rects), min(r.y0 for r in rects),
+            max(r.x1 for r in rects), max(r.y1 for r in rects))
+
+
+def _merge_citation_clusters(links: list, pages: list) -> list:
+    """引文簇/区间部分矩形合并（hyperref 把 [2, 3] 拆成 "[2,"→ref2 + "3]"→ref3、
+    [4–8] 拆成 "[4–"→ref4 + "–8]"→ref8；部分 token 过不了单条源文字校验）。
+
+    判定（保守，任一步不符维持原样）：同页、行心 y 差 ≤2.5pt、x 间隙 ≤10pt 的
+    cite.* 部分矩形连成 run（≥2 条），run 覆盖的完整原文恰构成合法引文形态
+    [\\d+(,\\s*\\d+)*] 或 [\\d+–\\d+]（含混合 [15, 19–22]），且每个部分恰好
+    含一段数字。通过则把各部分的字符区间收缩到其数字段并打簇组号；
+    注入时要求整组解析成功且落同一块，否则整组放弃。
+    """
+    by_page: dict[int, list[_Link]] = {}
+    for lk in links:
+        if not lk.dest_name.startswith("cite."):
+            continue
+        if _CLUSTER_FULL_RE.match(lk.text.strip()):
+            continue  # 完整引文本就可注入，不是部分矩形
+        if not _CLUSTER_PART_RE.match(lk.text.strip()):
+            continue
+        by_page.setdefault(lk.page, []).append(lk)
+
+    gid = 0
+    for pno, cands in by_page.items():
+        page = pages[pno]
+        if page is None:
+            continue
+        geo = []
+        for lk in cands:
+            r = _link_rect(page, lk)
+            if r is not None:
+                geo.append((r, lk))
+        # 按行心 y、x0 排序后连成 run：y 差超阈值或 x 间隙超限即断开
+        geo.sort(key=lambda t: ((t[0][1] + t[0][3]) / 2, t[0][0]))
+        runs: list[list[tuple]] = []
+        for r, lk in geo:
+            if runs:
+                pr, _pl = runs[-1][-1]
+                y_gap = abs((r[1] + r[3]) / 2 - (pr[1] + pr[3]) / 2)
+                x_gap = r[0] - pr[2]
+                if y_gap <= _CLUSTER_Y_TOL_PT and \
+                        -_CLUSTER_X_OVERLAP_PT <= x_gap <= _CLUSTER_X_GAP_PT:
+                    runs[-1].append((r, lk))
+                    continue
+            runs.append([(r, lk)])
+        for run in runs:
+            if len(run) < 2:
+                continue
+            parts = [lk for _r, lk in run]
+            full = page.raw[parts[0].c0:parts[-1].c1].strip()
+            if not _CLUSTER_FULL_RE.match(full):
+                continue
+            # 每个部分恰含一段数字；收缩区间到数字段
+            shrunk = []
+            for lk in parts:
+                digits = [i for i in range(lk.c0, lk.c1)
+                          if i < len(page.raw) and page.raw[i].isdigit()]
+                if not digits:
+                    shrunk = None
+                    break
+                d0, d1 = digits[0], digits[-1] + 1
+                seg = page.raw[d0:d1]
+                if not seg.isdigit():
+                    shrunk = None  # 数字被逗号/横线断开 → 一个部分含两段数字，放弃
+                    break
+                shrunk.append((lk, d0, d1, seg))
+            if shrunk is None:
+                continue
+            for lk, d0, d1, seg in shrunk:
+                lk.c0, lk.c1 = d0, d1
+                lk.text = seg
+                lk.cluster = gid
+            gid += 1
+    return links
 
 
 def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
@@ -378,8 +478,8 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
 # ============================================================
 
 # 可注入链接的块类型（heading 不注入——标题内链接会破坏 TOC/slug 稳定性；
-# equation 整个跳过；table 的 HTML 表体不注入）
-_INJECTABLE_KINDS = {"paragraph", "reference", "image", "table_image"}
+# equation 整个跳过；table 的 HTML 表体不注入；footnote 可注入 URI 邮箱等）
+_INJECTABLE_KINDS = {"paragraph", "reference", "image", "table_image", "footnote"}
 # 参与目标覆盖的块类型（image/table 用图注/表注文本对齐；equation 的 LaTeX
 # 内容与 PDF 原文差异大，位置覆盖常落空，靠同号唯一 \tag 兜底）
 _TARGETABLE_KINDS = _INJECTABLE_KINDS | {"heading", "table", "equation"}
@@ -535,6 +635,9 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
     if extracted is None:
         return None
     pages, links = extracted
+    # 引文簇/区间部分矩形合并（[2, 3] → "[2,"+"3]" 等）：通过校验的部分
+    # 收缩到数字段并打簇组号，主循环结束后整组同块判定提交
+    links = _merge_citation_clusters(links, pages)
     aligner = _Aligner(pages, blocks)
 
     # 目标映射用的索引：编号 → 块下标（同号多块 → 歧义，回退不可用）
@@ -559,9 +662,10 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
         else:
             idx_map.setdefault(num, []).append(idx)
 
-    # 每个块待注入区间（块下标 → [(o0, o1, target)]）
-    injections: dict[int, list[tuple[int, int, str]]] = {}
+    # 每个块待注入区间（块下标 → [(o0, o1, target, cat)]）
+    injections: dict[int, list[tuple[int, int, str, str]]] = {}
     math_spans: dict[int, list[tuple[int, int]]] = {}
+    cluster_pending: dict[int, list[tuple[tuple | None, str | None, str]]] = {}
     result = LinkResult()
 
     def _stat(cat: str, ok: bool):
@@ -762,12 +866,27 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             break
         # 目标映射 + 校验（URI 白名单兜底要看落在哪种块里）
         target, cat = _resolve(lk, blocks[placed[0]].kind if placed else None)
+        if lk.cluster >= 0:
+            # 簇部分矩形：暂缓提交，主循环后整组判定（全解析成功且落同一块）
+            cluster_pending.setdefault(lk.cluster, []).append((placed, target, cat))
+            continue
         if target is not None and placed is not None:
             injections.setdefault(placed[0], []).append(
                 (placed[1], placed[2], target, cat))
             _stat(cat, True)
         else:
             _stat(cat, False)
+
+    # 簇整组提交：任一成员未解析/未落块、或成员散落不同块 → 整组放弃
+    # （部分矩形本就过不了单条校验，放弃即维持原纯文本，不损失信息）
+    for _gid, items in cluster_pending.items():
+        idxs = {p[0] for p, t, _c in items if p is not None and t is not None}
+        ok = (len(idxs) == 1
+              and all(p is not None and t is not None for p, t, _c in items))
+        for p, t, cat in items:
+            if ok:
+                injections.setdefault(p[0], []).append((p[1], p[2], t, cat))
+            _stat(cat, ok)
 
     # 应用注入：同块多区间按偏移倒序逐个拼接，互不干扰。
     # 先就地合并同目标的相邻区间（跨行链接常被拆成多个矩形，如
