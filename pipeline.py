@@ -163,6 +163,16 @@ def convert_single(
             f"  最终正文退化检测命中（{quality_guard.describe(final_finding)}），"
             "不阻断输出，done 事件将打标 degenerate")
 
+    # P2.1 参考文献条目结构化：在链接注入之前取净文本切分（raw 不含链接语法），
+    # 渲染后落 references.json（纯增量产物，paper.md 逐字节不动）
+    refs_payload = None
+    if config.REFS_JSON:
+        try:
+            from reference_parser import prepare_references
+            refs_payload = prepare_references(blocks, use_llm=use_llm)
+        except Exception as e:
+            logger.warning(f"  参考文献结构化失败（不影响转换）: {e}")
+
     # P1 原生链接保留：从源 PDF 提取 link annotations 注入块内容，
     # 收集被指向的锚点 id 交给渲染器发射（无链接注释 → None → 零副作用输出）
     if keep_links is None:
@@ -194,6 +204,18 @@ def convert_single(
     )
     if reporter:
         reporter.complete_stage(4, "渲染装订", time.time() - t4)
+
+    # P2.1 落盘 references.json（与 paper.md 同级；payload 在链接注入前已备好）
+    if refs_payload is not None:
+        try:
+            from reference_parser import dump_references
+            dump_references(refs_payload, paper_md.parent)
+            logger.info(
+                f"  references.json: {refs_payload['count']} 条"
+                f"（source={refs_payload['source']}，"
+                f"doi {sum(1 for r in refs_payload['references'] if r['doi'])} 条）")
+        except Exception as e:
+            logger.warning(f"  references.json 落盘失败（不影响产物）: {e}")
 
     # QC 自检（轻量机械检查，WARN 走 stderr，不阻断转换）
     try:

@@ -69,6 +69,10 @@ MAX_PAPER_PAGES = int(_env("MAX_PAPER_PAGES", "200"))
 # 图组并集重裁（figure_merger）：布局检测把一张 Figure 拆碎时，同词干同页块 bbox 并集整幅重裁
 FIGURE_MERGE = _env_bool("FIGURE_MERGE", True)
 
+# P2.1 参考文献条目结构化（reference_parser）：references.json 落论文目录，
+# 纯增量产物（不动 paper.md 一个字节）；LLM 失败自动降级规则切分，不阻塞转换
+REFS_JSON = _env_bool("REFS_JSON", True)
+
 # P1 原生链接保留（link_extractor）：从源 PDF 提取 link annotations 注入 paper.md
 # （行内链接 + 锚点）。仅当输入是 PDF 且有链接注释时生效，扫描版/无注释 PDF 零副作用
 PDF_LINKS = _env_bool("PDF_LINKS", True)
