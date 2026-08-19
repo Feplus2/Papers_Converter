@@ -164,14 +164,19 @@ def convert_single(
             "不阻断输出，done 事件将打标 degenerate")
 
     # P2.1 参考文献条目结构化：在链接注入之前取净文本切分（raw 不含链接语法），
-    # 渲染后落 references.json（纯增量产物，paper.md 逐字节不动）
+    # 渲染后落 references.json（纯增量产物，paper.md 逐字节不动）。
+    # 条目编号同时用于"ref 锚点无条件发射"（任务：卡片点击代理需要每条目都有
+    # 锚点，无链接 PDF/旧产物也覆盖；与链接驱动锚点在渲染器去重合并）
     refs_payload = None
-    if config.REFS_JSON:
-        try:
-            from reference_parser import prepare_references
+    ref_entry_nums: list[int] = []
+    try:
+        from reference_parser import prepare_references, split_reference_entries
+        ref_entry_nums = [e["n"] for e in split_reference_entries(blocks)
+                          if e["n"] is not None]
+        if config.REFS_JSON:
             refs_payload = prepare_references(blocks, use_llm=use_llm)
-        except Exception as e:
-            logger.warning(f"  参考文献结构化失败（不影响转换）: {e}")
+    except Exception as e:
+        logger.warning(f"  参考文献结构化失败（不影响转换）: {e}")
 
     # P1 原生链接保留：从源 PDF 提取 link annotations 注入块内容，
     # 收集被指向的锚点 id 交给渲染器发射（无链接注释 → None → 零副作用输出）
@@ -193,6 +198,10 @@ def convert_single(
     t4 = time.time()
     if reporter:
         reporter.update_stage(4, "渲染装订", "渲染 Markdown、复制图片与 source.pdf...")
+    # 参考文献锚点无条件发射（每条切分出的编号条目都有 <a id="ref-N">），
+    # 与链接驱动锚点合并去重（renderer 内 emitted_anchors 去重）
+    if ref_entry_nums:
+        link_anchors = (link_anchors or set()) | {f"ref-{n}" for n in ref_entry_nums}
     paper_md = render_paper(
         blocks=blocks,
         metadata=metadata,

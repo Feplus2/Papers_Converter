@@ -13,6 +13,7 @@ from pathlib import Path
 import config
 from article_boundary import apply_article_boundary
 from cover_detect import detect_cover_pages
+from link_extractor import _REF_NUM_RE  # 条目编号解析与 #ref-N 锚点同源
 
 logger = logging.getLogger(__name__)
 
@@ -986,6 +987,71 @@ def _assign_table_numbers(blocks: list[ProcessedBlock]) -> None:
         logger.info(f"  表注补号: Table {n}（{cap[:40]}）")
 
 
+def _relocate_stray_reference_paragraphs(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
+    """参考文献区混入正文段的重定位（双栏阅读顺序错乱）。
+
+    引擎按栏产出时可能把正文末段嵌进文献序列（正确顺序：左栏正文尾→右栏
+    正文尾→左栏文献→右栏文献；错乱产物：左栏正文→左栏文献→右栏正文→右栏
+    文献，宇宙弦实测）。文献区里一切文本块在 _build_ir 都落成 reference，
+    故 paragraph 块出现在文献序列中本身就是阅读顺序错误的铁证。
+    保守判据（全满足才搬移，搬到最后一个参考文献标题之前）：
+      - 候选块 kind == "paragraph"；
+      - 后邻（跳 page_anchor）是带编号的 reference 条目；
+      - 前邻是带编号条目或参考文献标题本身；
+      - 内容是完整正文句形态（≥100 字符且 ≥10 词；条目形态/碎片不搬）。
+    reference 块一律不动——APA 无编号条目流与条目续行不受任何影响。
+    """
+    ref_h = None
+    for i, b in enumerate(blocks):
+        if b.kind == "heading" and _is_reference_heading(b.content or ""):
+            ref_h = i  # 取最后一个参考文献标题（正文里的同名提及被后者覆盖）
+    if ref_h is None:
+        return blocks
+
+    def _num(b) -> bool:
+        return b.kind == "reference" and _REF_NUM_RE.match(b.content or "") is not None
+
+    def _prev_non_anchor(i):
+        j = i - 1
+        while j > ref_h and blocks[j].kind == "page_anchor":
+            j -= 1
+        return j
+
+    def _next_non_anchor(i):
+        j = i + 1
+        while j < len(blocks) and blocks[j].kind == "page_anchor":
+            j += 1
+        return j if j < len(blocks) else None
+
+    out: list[ProcessedBlock] = []
+    moved: list[ProcessedBlock] = []
+    for i, b in enumerate(blocks):
+        if i <= ref_h or b.kind != "paragraph":
+            out.append(b)
+            continue
+        t = (b.content or "").strip()
+        if len(t) < 100 or len(t.split()) < 10:
+            out.append(b)
+            continue
+        pi = _prev_non_anchor(i)
+        ni = _next_non_anchor(i)
+        prev_ok = pi == ref_h or (pi is not None and _num(blocks[pi]))
+        next_ok = ni is not None and _num(blocks[ni])
+        if prev_ok and next_ok:
+            moved.append(b)
+            logger.info(f"  文献区混入正文段重定位: {t[:50]}...")
+            continue
+        out.append(b)
+    if not moved:
+        return blocks
+    # 插入点：参考文献标题之前（保留标题前的 page_anchor 原位——
+    # 插到"标题及其前置锚点"整体之前，正文尾之后）
+    ins = out.index(blocks[ref_h])
+    while ins > 0 and out[ins - 1].kind == "page_anchor":
+        ins -= 1
+    return out[:ins] + moved + out[ins:]
+
+
 def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
     """后处理：层级重建、段落合并、编号、清理"""
     # 1. 合并段落碎片
@@ -1011,6 +1077,14 @@ def _post_process(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
 
     # 4. 为无编号体系的论文补编号
     _add_numbering(blocks)
+
+    # 4.5 参考文献区混入正文段重定位（双栏阅读顺序错乱：
+    # 左栏正文→左栏文献→右栏正文→右栏文献 的引擎产物会把正文末段
+    # 嵌进文献序列里——宇宙弦实测）。只搬移 paragraph 块（文献区里
+    # paragraph 本就是异常——该区一切文本块在 _build_ir 都落成
+    # reference），且要求后邻是编号条目、前邻是编号条目或参考文献
+    # 标题本身；reference 块（含 APA 无编号条目流与条目续行）一律不动
+    blocks = _relocate_stray_reference_paragraphs(blocks)
 
     # 5. 清理连续空锚点 + 首尾锚点
     result = []
@@ -1238,6 +1312,32 @@ def _split_figure_legends(blocks: list[ProcessedBlock]) -> list[ProcessedBlock]:
     return out
 
 
+# 粘连图注里的编号标记（"FIG. 5. " / "Figure 12.4: "）；标号后须接 "."/":"
+# 加空白——"Fig. 3a"（面板字母）与 "Fig. 7)."（句中引用）都不命中
+_GLUED_CAP_RE = re.compile(r"\b(?:Fig(?:ure)?\.?|FIG\.?)\s*(\d+(?:\.\d+)*)\s*[\.\:]\s+", re.I)
+
+
+def _split_glued_caption(caption: str) -> list[tuple[str, str]]:
+    """粘连多图注切分：caption 以编号标记起首且含 ≥2 个不同编号标记时，
+    按标记切成 [(编号, 图注正文)]；任一条件不满足（首个标记不在开头、
+    编号重复、某段过短不像真图注）→ 返回 []（不拆，保持原样）。"""
+    caption = caption.strip()
+    marks = list(_GLUED_CAP_RE.finditer(caption))
+    if len(marks) < 2 or marks[0].start() != 0:
+        return []
+    nums = [m.group(1) for m in marks]
+    if len(set(nums)) != len(nums):
+        return []
+    parts = []
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(caption)
+        text = caption[m.end():end].strip()
+        if len(text) < 40:
+            return []
+        parts.append((m.group(1), text))
+    return parts
+
+
 def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
     """图组编号：把子图块归并到所属 Figure，生成文件名与图注。
 
@@ -1356,6 +1456,23 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
             g["main"] = main
             main.caption = f"Fig. {num}. {g['cap'].content}"
             g["cap"].kind = "_bound"
+
+        # 多图注粘连拆分：主图图注内还含第二个 Fig./FIG. 编号标记（引擎把同页
+        # 两张图的图注并到靠后的图块上），且组内图片数与图注段数恰一致 →
+        # 按流序一一对应拆分（图注顺序与图片顺序一致。blanco2024 实测：
+        # Fig.5/Fig.6 同页，双图注粘连于靠后图块，前置图被误当子图 fig5a）
+        if main is not None and subs:
+            parts = _split_glued_caption(main.caption or "")
+            imgs = subs + [main]  # 流序：子图块在前，编号主图块收尾
+            if parts and len(parts) == len(imgs) and parts[0][0] == num:
+                for (n_i, cap_i), b in zip(parts, imgs):
+                    ext = Path(b.img_src).suffix if b.img_src else ".png"
+                    b.img_new_name = _unique(f"{fig_stem(n_i)}{ext}")
+                    b.caption = cap_i
+                    b.content = f"Figure {n_i}: {cap_i}" if cap_i else f"Figure {n_i}"
+                logger.info(
+                    f"  图注粘连拆分: Figure {[p[0] for p in parts]}（{len(imgs)} 图）")
+                continue
 
         # 子图块：字母后缀
         for j, b in enumerate(subs):

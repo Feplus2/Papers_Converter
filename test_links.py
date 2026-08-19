@@ -722,6 +722,28 @@ class TestRenderAnchors(unittest.TestCase):
             )
             self.assertNotIn("<a id=", md.read_text(encoding="utf-8"))
 
+    def test_all_ref_anchors_emitted(self):
+        # 任务1：锚点集合含全部条目编号时逐条发射（不依赖链接驱动），
+        # 与链接驱动锚点去重；同号条目只在首条发射
+        blocks = [
+            ProcessedBlock("heading", content="References", level=1),
+            ProcessedBlock("reference", content="[1] A. Author, T1."),
+            ProcessedBlock("reference", content="[2] B. Author, T2."),
+            ProcessedBlock("reference", content="[3] C. Author, T3."),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            md = render_paper(
+                blocks=blocks,
+                metadata={"title": "T", "author": [{"name": "A"}], "date": "2024"},
+                output_dir=Path(td), slug="t",
+                link_anchors={"ref-1", "ref-2", "ref-3"},
+            )
+            text = md.read_text(encoding="utf-8")
+        self.assertIn('<a id="ref-1"></a>[1] A. Author', text)
+        self.assertIn('<a id="ref-2"></a>[2] B. Author', text)
+        self.assertIn('<a id="ref-3"></a>[3] C. Author', text)
+        self.assertEqual(text.count('<a id="ref-1"></a>'), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
