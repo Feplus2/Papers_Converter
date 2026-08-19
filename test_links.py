@@ -91,6 +91,22 @@ class TestAnchorIds(unittest.TestCase):
             block_anchor_id(ProcessedBlock("heading", content="References")),
             "sec-references")
 
+    def test_eq(self):
+        self.assertEqual(
+            block_anchor_id(ProcessedBlock(
+                "equation", content="$$\nE = mc^2 \\tag{5}\n$$")), "eq-5")
+        # 附录形态编号
+        self.assertEqual(
+            block_anchor_id(ProcessedBlock(
+                "equation", content="$$\n\\alpha' \\tag{A2}\n$$")), "eq-A2")
+        # 同块多 \tag：按既有去重规则取内容最长者（并列取最末）
+        self.assertEqual(
+            block_anchor_id(ProcessedBlock(
+                "equation", content="$$\nx \\tag{5}\\tag{50}\n$$")), "eq-50")
+        # 无 \tag → 无锚点
+        self.assertIsNone(
+            block_anchor_id(ProcessedBlock("equation", content="$$\nE=mc^2\n$$")))
+
 
 class TestExtractAndInject(unittest.TestCase):
     """合成两篇 PDF：正文页（page0）+ 参考文献/图注页（page1）。"""
@@ -233,6 +249,60 @@ class TestExtractAndInject(unittest.TestCase):
             "Energy $E = [5] exactly$ rises and [[5]](#ref-5) agrees.")
         pdf.unlink()
 
+    def test_equation_goto_positional(self):
+        # GOTO 直坐标记落到展示公式行：位置映射命中（公式块内容含原文片段）
+        pdf = _make_pdf([
+            {"texts": [(72, 100, "As shown in (5) the relation holds.")],
+             "links": [{"kind": fitz.LINK_GOTO, "from_text": "(5)",
+                        "page": 1, "to": (72, 101)}]},
+            {"texts": [(72, 100, "E = mc^2 (5)")]},
+        ])
+        blocks = [
+            ProcessedBlock("paragraph",
+                           content="As shown in (5) the relation holds.", src_page=0),
+            ProcessedBlock("equation", content="$$\nE = mc^2 \\tag{5}\n$$", src_page=1),
+        ]
+        res = collect_paper_links(blocks, pdf)
+        self.assertEqual(blocks[0].content,
+                         "As shown in [(5)](#eq-5) the relation holds.")
+        self.assertIn("eq-5", res.anchors)
+        pdf.unlink()
+
+    def test_equation_dest_mismatch_dropped(self):
+        # 位置映射落空（公式 LaTeX 化对不齐）且同号 \tag 不唯一/不存在 → 放弃
+        pdf = _make_pdf([
+            {"texts": [(72, 100, "As shown in (7) the relation holds.")],
+             "links": [{"kind": fitz.LINK_GOTO, "from_text": "(7)",
+                        "page": 1, "to": (72, 101)}]},
+            {"texts": [(72, 100, "E = mc^2 (5)")]},
+        ])
+        blocks = [
+            ProcessedBlock("paragraph",
+                           content="As shown in (7) the relation holds.", src_page=0),
+            ProcessedBlock("equation", content="$$\nE = mc^2 \\tag{5}\n$$", src_page=1),
+        ]
+        res = collect_paper_links(blocks, pdf)
+        self.assertEqual(blocks[0].content, "As shown in (7) the relation holds.")
+        self.assertNotIn("eq-5", res.anchors)
+        pdf.unlink()
+
+    def test_equation_no_tag_dropped(self):
+        # 位置映射命中的是无 \tag 公式块 → 解析不到编号，放弃保纯文本
+        pdf = _make_pdf([
+            {"texts": [(72, 100, "As shown in (5) the relation holds.")],
+             "links": [{"kind": fitz.LINK_GOTO, "from_text": "(5)",
+                        "page": 1, "to": (72, 101)}]},
+            {"texts": [(72, 100, "E = mc^2")]},
+        ])
+        blocks = [
+            ProcessedBlock("paragraph",
+                           content="As shown in (5) the relation holds.", src_page=0),
+            ProcessedBlock("equation", content="$$\nE = mc^2\n$$", src_page=1),
+        ]
+        res = collect_paper_links(blocks, pdf)
+        self.assertEqual(blocks[0].content, "As shown in (5) the relation holds.")
+        pdf.unlink()
+
     def test_duplicate_annotation_dedup(self):
         pdf = _make_pdf([
             {"texts": [(72, 100, "See [12] here.")],
@@ -326,18 +396,21 @@ class TestRenderAnchors(unittest.TestCase):
                            content="[12] X. Author, Great Title."),
             ProcessedBlock("image", content="Figure 3: A sample plot.",
                            img_new_name="fig3.jpg"),
+            ProcessedBlock("equation", content="$$\nE = mc^2 \\tag{5}\n$$"),
         ]
         with tempfile.TemporaryDirectory() as td:
             md = render_paper(
                 blocks=blocks,
                 metadata={"title": "T", "author": [{"name": "A"}], "date": "2024"},
                 output_dir=Path(td), slug="t",
-                link_anchors={"ref-12", "fig-3", "sec-ii-methods", "sec-absent"},
+                link_anchors={"ref-12", "fig-3", "sec-ii-methods", "sec-absent",
+                              "eq-5"},
             )
             text = md.read_text(encoding="utf-8")
         self.assertIn('<a id="sec-ii-methods"></a>\n# II. Methods', text)
         self.assertIn('<a id="ref-12"></a>[12] X. Author, Great Title.', text)
         self.assertIn('<a id="fig-3"></a>\n![Figure 3](images/fig3.jpg)', text)
+        self.assertIn('<a id="eq-5"></a>\n$$\nE = mc^2 \\tag{5}\n$$', text)
         # 不在集合内的块（References 标题）不发射锚点
         self.assertNotIn("sec-references", text)
 

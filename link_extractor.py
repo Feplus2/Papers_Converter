@@ -52,6 +52,17 @@ _REF_NUM_RE = re.compile(r"^\s*\[(\d{1,4})\]|^\s*(\d{1,4})[.\)]\s")
 _FIG_NUM_RE = re.compile(r"^\s*Figure\s+(\d+(?:\.\d+)*)", re.I)
 _TAB_NUM_RE = re.compile(r"^\s*Table\s+(\d+(?:\.\d+)*)", re.I)
 _HEAD_NUM_RE = re.compile(r"^\s*([IVXLC]+|\d+(?:\.\d+)*)[.\):]?\s")
+# 公式 \tag 编号（与 content_processor._EQUATION_TAG_RE 同形态，捕获编号内容）
+_EQ_TAG_RE = re.compile(r"\\tag\*?\s*\{([^{}]*)\}")
+# 公式引用源文字：(5) / (A2) / Eq. (5) / Eqs. (12)——hyperref 的 equation.N
+# dest 名是内部计数器而非印刷编号（实测 equation.4 的可见文字是 (5)），
+# 编号必须取自源文字，dest 名只用来定性类型
+_EQ_NUM_TEXT_RE = re.compile(
+    r"^(?:(?:Eqs?\.?|Equations?)\s*)?\(\s*([A-Za-z]?\d[\w]*)\s*\)$", re.I)
+_EQ_NUM_BARE_RE = re.compile(r"^\(\s*([A-Za-z]?\d[\w]*)\s*\)$")
+# named equation.* 的源文字放宽到裸数字（hyperref 链接矩形只覆盖 "(5)" 里的数字，
+# 括号在矩形外）；dest 已声明类型，语义充分
+_EQ_NUM_DEST_RE = re.compile(r"^\(?\s*([A-Za-z]?\d[\w]*)\s*\)?$")
 
 # 数学段（行内 $...$ 与展示 $$...$$）：内部一律不注入
 _MATH_SPAN_RE = re.compile(r"\$\$.+?\$\$|\$[^$\n]+?\$", re.S)
@@ -106,6 +117,15 @@ def block_anchor_id(block) -> str | None:
         m = _TAB_NUM_RE.match((block.caption or "").strip())
         if m:
             return f"tab-{m.group(1)}"
+    if block.kind == "equation":
+        # 公式编号从内容 \tag{N} 解析（N 可为 50 或 A2 附录形态）；同块多 \tag
+        # 按 _dedup_equation_tags 既有规则取准（内容最长者，并列取最末）；
+        # 无 \tag 的公式不生成锚点
+        tags = _EQ_TAG_RE.findall(block.content or "")
+        if tags:
+            keep = max(range(len(tags)), key=lambda i: (len(tags[i]), i))
+            return f"eq-{tags[keep]}"
+        return None
     return None
 
 
@@ -360,8 +380,9 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
 # 可注入链接的块类型（heading 不注入——标题内链接会破坏 TOC/slug 稳定性；
 # equation 整个跳过；table 的 HTML 表体不注入）
 _INJECTABLE_KINDS = {"paragraph", "reference", "image", "table_image"}
-# 参与目标覆盖的块类型（image/table 用图注/表注文本对齐）
-_TARGETABLE_KINDS = _INJECTABLE_KINDS | {"heading", "table"}
+# 参与目标覆盖的块类型（image/table 用图注/表注文本对齐；equation 的 LaTeX
+# 内容与 PDF 原文差异大，位置覆盖常落空，靠同号唯一 \tag 兜底）
+_TARGETABLE_KINDS = _INJECTABLE_KINDS | {"heading", "table", "equation"}
 
 
 class _BlockMap:
@@ -520,14 +541,15 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
     ref_index: dict[str, list[int]] = {}
     fig_index: dict[str, list[int]] = {}
     tab_index: dict[str, list[int]] = {}
+    eq_index: dict[str, list[int]] = {}
     head_index: dict[str, list[int]] = {}
     for idx, b in enumerate(blocks):
         aid = block_anchor_id(b)
         if not aid:
             continue
         kind, _, num = aid.partition("-")
-        idx_map = {"ref": ref_index, "fig": fig_index,
-                   "tab": tab_index, "sec": head_index}.get(kind)
+        idx_map = {"ref": ref_index, "fig": fig_index, "tab": tab_index,
+                   "eq": eq_index, "sec": head_index}.get(kind)
         if idx_map is None:
             continue
         if kind == "sec":
@@ -584,8 +606,24 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             if len(cands) == 1:
                 return f"#ref-{num}", "ref"
             return None, "ref"
-        if dest.startswith(("equation", "frontmatter", "footnote")) or "-footnote" in dest:
-            return None, "other"  # 无对应锚点契约（公式锚点留给后续迭代）
+        if dest.startswith(("frontmatter", "footnote")) or "-footnote" in dest:
+            return None, "other"  # 无对应锚点契约
+        if dest.startswith("equation"):
+            # equation.N 的 N 是 hyperref 内部计数器而非印刷 \tag 编号
+            # （实测 equation.4 的可见文字是 (5)），编号取自源文字，
+            # 位置映射与编号必须一致，失配回退"同号唯一 \tag 块"
+            em = _EQ_NUM_DEST_RE.match(text)
+            if not em:
+                return None, "eq"
+            num = em.group(1)
+            idx = _target_block(lk)
+            if idx is not None and blocks[idx].kind == "equation" \
+                    and block_anchor_id(blocks[idx]) == f"eq-{num}":
+                return f"#eq-{num}", "eq"
+            cands = eq_index.get(num, [])
+            if len(cands) == 1:
+                return f"#eq-{num}", "eq"
+            return None, "eq"
         if dest.startswith("figure."):
             num = dest.split(".", 1)[1]
             tm = _NUM_TEXT_RE.search(text)
@@ -655,6 +693,20 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             if len(cands) == 1:
                 return f"#tab-{num}", "tab"
             return None, "tab"
+        # 公式引用："Eq. (5)" 文字自带语义，允许同号唯一兜底；
+        # 裸 "(5)" 只信位置映射（与裸 "[12]" 同规）
+        em = _EQ_NUM_TEXT_RE.match(text)
+        if em:
+            num = em.group(1)
+            idx = _target_block(lk)
+            if idx is not None and blocks[idx].kind == "equation" \
+                    and block_anchor_id(blocks[idx]) == f"eq-{num}":
+                return f"#eq-{num}", "eq"
+            if not _EQ_NUM_BARE_RE.match(text):  # "Eq. (5)" 形态
+                cands = eq_index.get(num, [])
+                if len(cands) == 1:
+                    return f"#eq-{num}", "eq"
+            return None, "eq"
         sm_ = _SEC_TEXT_RE.match(text)
         if sm_ and re.match(r"^(?:Section|Sec|§)", text, re.I):
             num = sm_.group(1).upper()

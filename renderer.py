@@ -233,6 +233,9 @@ def _render_body(
                 lines.append(caption)
 
         elif block.kind == "equation":
+            anchor = _anchor_line(block)
+            if anchor:
+                lines.append(anchor)
             lines.append(block.content)
 
         elif block.kind == "reference":
