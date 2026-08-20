@@ -576,7 +576,12 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
                         continue
                 elif kind in (fitz.LINK_GOTO, fitz.LINK_NAMED):
                     dest_name = lk.get("nameddest", "") or ""
-                    dest_page = lk.get("page", -1)
+                    # MuPDF 的 LINK_NAMED page 字段可能是字符串（martins2000
+                    # 实测 '10'，直接比较即 TypeError 全灭）——先归一成 int
+                    try:
+                        dest_page = int(lk.get("page", -1))
+                    except (TypeError, ValueError):
+                        dest_page = -1
                     to = lk.get("to")
                     if to is not None:
                         dest_x, dest_y = to.x, to.y
@@ -593,7 +598,10 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
                         nm = names.get(dest_name)
                         if nm:
                             if dest_page < 0:
-                                dest_page = nm.get("page", -1)
+                                try:
+                                    dest_page = int(nm.get("page", -1))
+                                except (TypeError, ValueError):
+                                    dest_page = -1
                             if to is None:
                                 to2 = nm.get("to")
                                 if to2 is not None and 0 <= dest_page < doc.page_count:
@@ -631,6 +639,13 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
                 links.append(_Link(pno, c0, c1, text, uri,
                                    dest_page, dest_x, dest_y, dest_name))
         if not links:
+            # 可分辨的零产出原因：页面无任何链接注释 vs 有注释但全部不可用
+            total_ann = sum(len(doc[p].get_links()) for p in range(doc.page_count))
+            if total_ann:
+                logger.info(f"  链接提取: PDF 共 {total_ann} 条链接注释，"
+                            "无可用条目（全为不支持类型/解析失败）")
+            else:
+                logger.info("  链接提取: PDF 无链接注释（扫描版/无注解），跳过")
             return None
         # 同 URI 且区间相邻（仅隔空白/换行）的链接矩形合并——跨行拆链
         # （LaTeX hyperref 常把一个 URL 拆成多个注释），合并后白名单校验
@@ -997,6 +1012,18 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             if idx is not None and blocks[idx].kind == "reference" \
                     and block_anchor_id(blocks[idx]) == f"ref-{num}":
                 return f"#ref-{num}", "ref"
+            return None, "ref"
+        # 无名 named dest 的裸数字引文（arXiv 老 PDF，martins2000 实测：kind=NAMED
+        # 但 nameddest 为空、只有目标页没有坐标）：编号 + 目标页即条目页双校验。
+        # 锚点页与条目页允许 ±1 偏差（该文 dest 页比条目实际页多 1——hyperref
+        # 把文献锚打在条目流的次页起首，实测）
+        if m_cite:
+            num = m_cite.group(1)
+            cands = ref_index.get(num, [])
+            if len(cands) == 1 and lk.dest_page >= 0:
+                sp = getattr(blocks[cands[0]], "src_page", None)
+                if sp is not None and abs(sp - lk.dest_page) <= 1:
+                    return f"#ref-{num}", "ref"
             return None, "ref"
         fm = _FIG_TEXT_RE.match(text)
         if fm:

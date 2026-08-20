@@ -78,6 +78,23 @@ class TestContinuityEndToEnd(unittest.TestCase):
         self.assertEqual(_check_fig_table_continuity(body), [])
 
 
+class TestHeadingGapWarn(unittest.TestCase):
+    def test_gap_warns(self):
+        from qc_paper import _check_heading_number_gaps
+        body = "# I. INTRODUCTION\n\n# II. MODEL\n\n# III. PARAM\n\n# V. NETWORKS\n"
+        w = _check_heading_number_gaps(body)
+        self.assertTrue(any("IV" in x for x in w), w)
+
+    def test_complete_quiet(self):
+        from qc_paper import _check_heading_number_gaps
+        body = "# I. A\n\n# II. B\n\n# III. C\n"
+        self.assertEqual(_check_heading_number_gaps(body), [])
+
+    def test_too_few_headings_quiet(self):
+        from qc_paper import _check_heading_number_gaps
+        self.assertEqual(_check_heading_number_gaps("# I. A\n\n# III. C\n"), [])
+
+
 class TestEmptyReferencesSevere(unittest.TestCase):
     """forecast 事故：References 标题存在但条目零 → 严重级发现。"""
 

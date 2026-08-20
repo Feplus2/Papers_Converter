@@ -181,6 +181,7 @@ def qc_paper_md(paper_md_path: Path) -> list[str]:
     body = _strip_frontmatter(text)
     warns: list[str] = []
     warns += _check_fig_table_continuity(body)
+    warns += _check_heading_number_gaps(body)
     warns += _check_references_order(body)
     warns += _check_references_segmentation(body)
 
@@ -261,6 +262,31 @@ def _check_equation_integrity(body: str) -> list[str]:
         for issue in issues:
             out.append(f"公式结构疑似损坏（{label}）: {issue}")
     return out
+
+
+def _check_heading_number_gaps(body: str) -> list[str]:
+    """一级标题罗马编号断档（I、II、III、V…缺 IV）→ WARN。
+    引擎把章节标题误判为页眉过滤的可探测信号（martins2000 实测；
+    content_processor 的页眉池捞回先行动，仍断档才到这里报警）。"""
+    vals = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+    nums = []
+    for m in re.finditer(r"^#\s+([IVXLC]+)[.\s]", body, re.M):
+        total, prev = 0, 0
+        for ch in reversed(m.group(1)):
+            v = vals[ch]
+            total += v if v >= prev else -v
+            prev = max(prev, v)
+        nums.append(total)
+    if len(nums) < 3:
+        return []
+    missing = [n for n in range(min(nums), max(nums) + 1) if n not in nums]
+    if missing and len(missing) <= 3:
+        roman = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII",
+                 8: "VIII", 9: "IX", 10: "X"}
+        names = [roman.get(n, str(n)) for n in missing]
+        return [f"章节编号疑似断档: 缺 {'/'.join(names)} 节标题"
+                "（疑似被当页眉过滤）"]
+    return []
 
 
 def _check_references_nonempty(body: str) -> list[str]:

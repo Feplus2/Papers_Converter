@@ -265,5 +265,53 @@ class TestArxivAndTitleHygiene(unittest.TestCase):
         self.assertEqual(refs[1]["arxiv_id"], "hep-th/0204074")
 
 
+    def test_llm_empty_response_retried(self):
+        # 空/非 JSON 响应重试一次后成功（martins2000 "Expecting value" 实测）
+        import sys
+        import types
+        calls = {"n": 0}
+
+        class _Msg:
+            def __init__(self, c): self.content = c
+
+        class _Choice:
+            def __init__(self, c): self.message = _Msg(c)
+
+        class _Resp:
+            def __init__(self, c): self.choices = [_Choice(c)]
+
+        class _Completions:
+            def create(self, **_kw):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return _Resp("")   # 空响应
+                return _Resp('[{"n": 1, "title": "T", "authors": [], '
+                           '"year": 2005, "venue": "Nature", "doi": null}]')
+
+        class _Chat:
+            completions = _Completions()
+
+        class _Client:
+            def __init__(self, **kw): self.chat = _Chat()
+
+        fake = types.ModuleType("openai")
+        fake.OpenAI = _Client
+        orig_mod = sys.modules.get("openai")
+        orig_key = rp.config.DEEPSEEK_API_KEY
+        rp.config.DEEPSEEK_API_KEY = "test-key"
+        sys.modules["openai"] = fake
+        try:
+            items = rp._llm_extract([{"n": 1, "raw": "[1] A, T."}], use_llm=True)
+        finally:
+            rp.config.DEEPSEEK_API_KEY = orig_key
+            if orig_mod is not None:
+                sys.modules["openai"] = orig_mod
+            else:
+                del sys.modules["openai"]
+        self.assertEqual(calls["n"], 2)
+        self.assertIsNotNone(items)
+        self.assertEqual(items[0]["title"], "T")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -206,23 +206,35 @@ def _llm_extract(entries: list[dict], use_llm: bool) -> list[dict] | None:
             listing = json.dumps(
                 [{"n": e["n"], "raw": e["raw"][:_LLM_RAW_TRUNC]} for e in chunk],
                 ensure_ascii=False)
-            resp = client.chat.completions.create(
-                model=config.DEEPSEEK_MODEL,
-                messages=[
-                    {"role": "system",
-                     "content": "你是文献条目解析器。只返回 JSON 数组。"},
-                    {"role": "user", "content": _PROMPT % listing},
-                ],
-                temperature=0.0,
-                max_tokens=4096,
-            )
-            content = (resp.choices[0].message.content or "").strip()
-            content = re.sub(r"^```(?:json)?\s*", "", content)
-            content = re.sub(r"\s*```$", "", content)
-            try:
-                data = json.loads(content)
-            except json.JSONDecodeError:
-                data = json.loads(re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", content))
+            # 空响应/非 JSON 响应重试一次（martins2000 实测 LLM 偶发空回
+            # "Expecting value: line 1 column 1"），再失败才干净降级
+            data = None
+            for attempt in range(2):
+                resp = client.chat.completions.create(
+                    model=config.DEEPSEEK_MODEL,
+                    messages=[
+                        {"role": "system",
+                         "content": "你是文献条目解析器。只返回 JSON 数组。"},
+                        {"role": "user", "content": _PROMPT % listing},
+                    ],
+                    temperature=0.0,
+                    max_tokens=4096,
+                )
+                content = (resp.choices[0].message.content or "").strip()
+                content = re.sub(r"^```(?:json)?\s*", "", content)
+                content = re.sub(r"\s*```$", "", content)
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError:
+                    try:
+                        data = json.loads(
+                            re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", content))
+                    except json.JSONDecodeError:
+                        data = None
+                if isinstance(data, list):
+                    break
+                if attempt == 0:
+                    logger.warning("  参考文献 LLM 返回空/非 JSON，重试一次")
             if not isinstance(data, list):
                 return None
             items.extend(x for x in data if isinstance(x, dict))

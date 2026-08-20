@@ -285,6 +285,47 @@ class TestFootnotePandoc(unittest.TestCase):
         self.assertIn("[^6]: Note that, the direction of degeneracy.", text)
 
 
+class TestSectionGapRescue(unittest.TestCase):
+    """IV 标题被当页眉过滤的断档捞回（martins2000 事故原形）。"""
+
+    def _heads(self, *titles):
+        return [ProcessedBlock("heading", content=t, level=1) for t in titles]
+
+    def test_rescue_from_header_pool(self):
+        from content_processor import _rescue_missing_section_headings
+        blocks = self._heads("I. INTRODUCTION", "II. MODEL",
+                             "III. THE MOMENTUM PARAMETER",
+                             "V. STRING NETWORKS IN GENERAL FRW SPACETIMES")
+        dropped = [{"type": "header", "page_idx": 6,
+                    "text": "IV. THE EFFECT OF RADIATION BACK-REACTION"}]
+        out = _rescue_missing_section_headings(blocks, dropped)
+        titles = [b.content for b in out]
+        self.assertIn("IV. THE EFFECT OF RADIATION BACK-REACTION", titles)
+        # 插入位置在 V 之前
+        self.assertLess(titles.index("IV. THE EFFECT OF RADIATION BACK-REACTION"),
+                        titles.index("V. STRING NETWORKS IN GENERAL FRW SPACETIMES"))
+
+    def test_no_candidate_stays(self):
+        from content_processor import _rescue_missing_section_headings
+        blocks = self._heads("I. A", "II. B", "IV. C")
+        out = _rescue_missing_section_headings(blocks, [])
+        self.assertEqual(len(out), 3)
+
+    def test_no_gap_untouched(self):
+        from content_processor import _rescue_missing_section_headings
+        blocks = self._heads("I. A", "II. B", "III. C")
+        out = _rescue_missing_section_headings(
+            blocks, [{"type": "header", "text": "IV. SOMETHING", "page_idx": 1}])
+        self.assertEqual(len(out), 3)
+
+    def test_non_roman_untouched(self):
+        from content_processor import _rescue_missing_section_headings
+        blocks = self._heads("1 Intro", "3 Methods")  # 点号编号不参与罗马断档
+        out = _rescue_missing_section_headings(
+            blocks, [{"type": "header", "text": "2. Results", "page_idx": 1}])
+        self.assertEqual(len(out), 2)
+
+
 class TestRefTextListBlocks(unittest.TestCase):
     """list + sub_type:ref_text 块映射（forecast 零丢失事故原形）。"""
 

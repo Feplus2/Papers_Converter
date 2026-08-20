@@ -292,13 +292,17 @@ def process_content(content_list: list[dict], images_dir: str = "",
     cover_pages = detect_cover_pages(content_list, title=title)
 
     # Step 2: 过滤噪声块（page_footnote 不再丢弃——作者单位/正文脚注是正文
-    # 一部分，丢失违反文本零丢失红线；在 _build_ir 里落成独立 footnote 块）
+    # 一部分，丢失违反文本零丢失红线；在 _build_ir 里落成独立 footnote 块）。
+    # 被丢的页眉/页脚块保留在 dropped_noise（页眉池）：引擎偶把章节标题误判为
+    # header（martins2000 的 IV. 标题实测），供断档捞回
     filtered = []
+    dropped_noise = []
     for block in content_list:
         page_idx = block.get("page_idx", 0)
         if page_idx in cover_pages:
             continue
         if block["type"] in _NOISE_TYPES:
+            dropped_noise.append(block)
             continue
         filtered.append(block)
 
@@ -320,6 +324,85 @@ def process_content(content_list: list[dict], images_dir: str = "",
     # Step 5: 后处理（heading 层级重建、编号、空段清理）
     blocks = _post_process(blocks)
 
+    # Step 6: 章节编号断档捞回（引擎把章节标题误判为页眉/header 时：
+    # 正文出现 I、II、III、V… 明显断档，从被过滤的页眉池按编号形态捞回；
+    # 捞不到候选则由 qc_paper 的断档检查 WARN 提示）
+    blocks = _rescue_missing_section_headings(blocks, dropped_noise)
+
+    return blocks
+
+
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+
+
+def _roman_to_int(s: str) -> int | None:
+    total, prev = 0, 0
+    for ch in reversed(s.upper()):
+        v = _ROMAN_VALUES.get(ch)
+        if v is None:
+            return None
+        total += v if v >= prev else -v
+        prev = max(prev, v)
+    return total if 0 < total <= 30 else None
+
+
+def _int_to_roman(n: int) -> str:
+    vals = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+    out = ""
+    for v, s in vals:
+        while n >= v:
+            out += s
+            n -= v
+    return out
+
+
+def _rescue_missing_section_headings(blocks: list[ProcessedBlock],
+                                     dropped_noise: list[dict]) -> list[ProcessedBlock]:
+    """章节罗马编号断档捞回（martins2000 实测：'IV. THE EFFECT OF RADIATION
+    BACK-REACTION' 被引擎标成 header 整块过滤）。
+
+    保守判据：一级标题构成明确罗马序列（≥3 个）且断档 ≤3 个；候选块文本以
+    缺失编号起首（IV. / IV 形态）、长度像标题；捞回插到下一个编号标题之前。
+    无候选 → 不动（由 QC 断档 WARN 提示）。"""
+    heads = []
+    for i, b in enumerate(blocks):
+        if b.kind == "heading" and b.level == 1:
+            m = _ROMAN_NUM_RE.match(b.content or "")
+            if m:
+                rn = _roman_to_int(m.group(0).split(".")[0].split()[0])
+                if rn is not None:
+                    heads.append((i, rn))
+    if len(heads) < 3:
+        return blocks
+    nums = [rn for _i, rn in heads]
+    missing = [n for n in range(min(nums), max(nums) + 1) if n not in nums]
+    if not missing or len(missing) > 3:
+        return blocks
+    for n in sorted(missing, reverse=True):  # 倒序插入，索引不失效
+        rn = _int_to_roman(n)
+        cand = None
+        for b in dropped_noise:
+            t = re.sub(r"\s+", " ", (b.get("text") or "").strip())
+            if re.match(rf"^{rn}\.?\s+\S", t) and 10 < len(t) < 120:
+                cand = (t, b.get("page_idx", 0))
+                break
+        if cand is None:
+            logger.warning(f"  章节编号断档: 缺第 {rn} 节标题（页眉池无候选，未捞回）")
+            continue
+        # 每次插入前重算标题位置（上次插入会移位）
+        heads = []
+        for i, b in enumerate(blocks):
+            if b.kind == "heading" and b.level == 1:
+                m = _ROMAN_NUM_RE.match(b.content or "")
+                if m:
+                    rn2 = _roman_to_int(m.group(0).split(".")[0].split()[0])
+                    if rn2 is not None:
+                        heads.append((i, rn2))
+        nxt = next((i for i, rn2 in heads if rn2 > n), None)
+        ins = nxt if nxt is not None else len(blocks)
+        blocks.insert(ins, ProcessedBlock("heading", content=cand[0], level=1,
+                                          src_page=cand[1]))
+        logger.info(f"  章节断档捞回: {cand[0][:50]}（页眉池）")
     return blocks
 
 
