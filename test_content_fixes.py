@@ -293,17 +293,31 @@ class TestSectionGapRescue(unittest.TestCase):
 
     def test_rescue_from_header_pool(self):
         from content_processor import _rescue_missing_section_headings
-        blocks = self._heads("I. INTRODUCTION", "II. MODEL",
-                             "III. THE MOMENTUM PARAMETER",
-                             "V. STRING NETWORKS IN GENERAL FRW SPACETIMES")
+        blocks = [
+            ProcessedBlock("heading", content="III. THE MOMENTUM PARAMETER", level=1),
+            ProcessedBlock("paragraph", content="III 节正文收尾段落，内容较长以通过判定。" * 5,
+                           src_page=5),
+            ProcessedBlock("page_anchor", content="7", page_idx=6),
+            # IV 节内容（标题被过滤）：页 6 的首个正文块
+            ProcessedBlock("paragraph", content="We now turn to the effect of radiation back-reaction on the evolution of the string network in this section." ,
+                           src_page=6),
+            ProcessedBlock("heading", content="V. STRING NETWORKS IN GENERAL FRW SPACETIMES", level=1),
+        ]
+        # 需要 ≥3 个一级罗马标题才判定体系——补 I/II
+        blocks = [ProcessedBlock("heading", content="I. INTRODUCTION", level=1),
+                  ProcessedBlock("heading", content="II. MODEL", level=1)] + blocks
         dropped = [{"type": "header", "page_idx": 6,
                     "text": "IV. THE EFFECT OF RADIATION BACK-REACTION"}]
         out = _rescue_missing_section_headings(blocks, dropped)
-        titles = [b.content for b in out]
-        self.assertIn("IV. THE EFFECT OF RADIATION BACK-REACTION", titles)
-        # 插入位置在 V 之前
-        self.assertLess(titles.index("IV. THE EFFECT OF RADIATION BACK-REACTION"),
-                        titles.index("V. STRING NETWORKS IN GENERAL FRW SPACETIMES"))
+        titles = [(b.kind, b.content) for b in out]
+        iv_idx = next(i for i, (k, c) in enumerate(titles)
+                      if c.startswith("IV. THE EFFECT"))
+        # 标题落在 IV 节内容块之前、页锚之后（不在 V 之前）
+        self.assertEqual(titles[iv_idx - 1][0], "page_anchor")
+        self.assertEqual(titles[iv_idx + 1][1][:12], "We now turn ")
+        self.assertLess(iv_idx,
+                        next(i for i, (k, c) in enumerate(titles)
+                             if c.startswith("V. STRING")))
 
     def test_no_candidate_stays(self):
         from content_processor import _rescue_missing_section_headings

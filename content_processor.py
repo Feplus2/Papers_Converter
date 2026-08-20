@@ -389,20 +389,26 @@ def _rescue_missing_section_headings(blocks: list[ProcessedBlock],
         if cand is None:
             logger.warning(f"  章节编号断档: 缺第 {rn} 节标题（页眉池无候选，未捞回）")
             continue
-        # 每次插入前重算标题位置（上次插入会移位）
-        heads = []
+        # 插入点：候选页（页眉块所在页）正文内容的起始处——该页页锚之后、
+        # 第一个属于该页的正文块之前，使标题落在其节内容开头而非下一编号
+        # 标题之前（首版插在 V 之前的末尾位置，martins2000 dev 实测纠正）。
+        # 找不到可靠插入点 → 不捞（维持断档 + QC WARN，宁缺毋滥）
+        ins = None
         for i, b in enumerate(blocks):
-            if b.kind == "heading" and b.level == 1:
-                m = _ROMAN_NUM_RE.match(b.content or "")
-                if m:
-                    rn2 = _roman_to_int(m.group(0).split(".")[0].split()[0])
-                    if rn2 is not None:
-                        heads.append((i, rn2))
-        nxt = next((i for i, rn2 in heads if rn2 > n), None)
-        ins = nxt if nxt is not None else len(blocks)
+            if b.kind == "page_anchor":
+                continue
+            bpage = getattr(b, "src_page", None)
+            if bpage is None and b.kind in ("image", "table", "table_image"):
+                bpage = b.page_idx
+            if bpage == cand[1]:
+                ins = i
+                break
+        if ins is None:
+            logger.warning(f"  章节断档捞回放弃：找不到第 {rn} 节内容的可靠插入点")
+            continue
         blocks.insert(ins, ProcessedBlock("heading", content=cand[0], level=1,
                                           src_page=cand[1]))
-        logger.info(f"  章节断档捞回: {cand[0][:50]}（页眉池）")
+        logger.info(f"  章节断档捞回: {cand[0][:50]}（页眉池，落于页 {cand[1] + 1} 内容前）")
     return blocks
 
 
