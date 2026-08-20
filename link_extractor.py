@@ -48,7 +48,17 @@ _SEC_TEXT_RE = re.compile(
     r"^(?:(?:Sections?|Sec\.?|§)\s*)?([IVXLC]+|\d+(?:\.\d+)*)\s*[.,\)]?$", re.I)
 
 # 块内容里的编号解析（锚点 id 用）
-_REF_NUM_RE = re.compile(r"^\s*\[(\d{1,4})\]|^\s*(\d{1,4})[.\)]\s")
+_REF_NUM_RE = re.compile(
+    r"^\s*\[(\d{1,4})\]|^\s*(\d{1,4})[.\)]\s|^\s*(\d{1,4})\s+(?=[A-Z])")
+  # 第三形态：裸编号 + 空格 + 大写（RSC 式 "1 J. Y. Hwang, ..."，wang2024 实测）
+
+
+def ref_entry_num(content: str) -> str | None:
+    """参考文献条目首部编号（[N]/N./N)/裸 N 四形态归一取值）。"""
+    m = _REF_NUM_RE.match(content or "")
+    if not m:
+        return None
+    return m.group(1) or m.group(2) or m.group(3)
 _FIG_NUM_RE = re.compile(r"^\s*Figure\s+(\d+(?:\.\d+)*)", re.I)
 _TAB_NUM_RE = re.compile(r"^\s*Table\s+(\d+(?:\.\d+)*)", re.I)
 _HEAD_NUM_RE = re.compile(r"^\s*([IVXLC]+|\d+(?:\.\d+)*)[.\):]?\s")
@@ -101,10 +111,8 @@ def block_anchor_id(block) -> str | None:
         s = _slug(block.content or "")
         return f"sec-{s}" if s else None
     if block.kind == "reference":
-        m = _REF_NUM_RE.match(block.content or "")
-        if m:
-            return f"ref-{m.group(1) or m.group(2)}"
-        return None
+        n = ref_entry_num(block.content or "")
+        return f"ref-{n}" if n else None
     if block.kind in ("image", "table_image"):
         m = _FIG_NUM_RE.match((block.content or "").strip())
         if m:

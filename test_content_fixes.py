@@ -18,9 +18,11 @@ from content_processor import (
 )
 
 
-def _img(name: str, caption: str = "", page: int = 10) -> ProcessedBlock:
+def _img(name: str, caption: str = "", page: int = 10,
+         bbox=None) -> ProcessedBlock:
     return ProcessedBlock("image", content=caption, caption=caption,
-                          img_src=f"images/{name}.jpg", page_idx=page)
+                          img_src=f"images/{name}.jpg", page_idx=page,
+                          bbox=bbox if bbox is not None else [100, 100, 400, 300])
 
 
 class TestGluedCaptionSplit(unittest.TestCase):
@@ -375,6 +377,123 @@ class TestRefTextListBlocks(unittest.TestCase):
         texts = [b.content for b in blocks if b.kind == "paragraph"]
         self.assertIn("First assumption holds.", texts)
         self.assertIn("Second assumption fails.", texts)
+
+
+class TestMergerCaptionAndConsolidation(unittest.TestCase):
+    """A/B 修复：主图注 caption 前缀形态 + 同图碎片跨 run 归并。"""
+
+    def _pdf(self, td):
+        doc = fitz.open()
+        doc.new_page(width=612, height=792)
+        path = Path(td) / "t.pdf"
+        doc.save(path)
+        doc.close()
+        return path
+
+    def test_main_caption_prefixed_for_merger(self):
+        # 主图注块 caption 必须是 "Figure N: ..." 形态——否则 merger 的
+        # 真图注组界判定认不出主块，整组合并时图注随被丢块消失
+        blocks = [
+            ProcessedBlock("paragraph", content="Body text before figures."),
+            _img("p1", page=4),
+            _img("main", caption="Fig. 3 (a) Comparison of the abundance of "
+                                 "the resources of Na and Li. (b) Distribution map.",
+                 page=4),
+        ]
+        _assign_figure_numbers(blocks)
+        main = blocks[2]
+        self.assertEqual(main.img_new_name, "fig3.jpg")
+        self.assertTrue(main.caption.startswith("Figure 3:"), main.caption[:30])
+
+    def test_same_stem_runs_consolidated(self):
+        # 同页同图编号的两个 run（中间隔长文字块）归并为一次整幅重裁
+        import figure_merger
+        with tempfile.TemporaryDirectory() as td:
+            pdf = self._pdf(td)
+            blocks = [
+                _img("a", page=0, bbox=[100, 100, 400, 300]),
+                _img("b", page=0, bbox=[420, 100, 700, 300]),
+                ProcessedBlock("paragraph", content="x" * 60, src_page=0),
+                _img("e", page=0, bbox=[100, 320, 400, 500]),
+                _img("m", caption="Fig. 33 (a) PDF fitting curves with a "
+                                 "sufficiently long real caption here.", page=0,
+                     bbox=[420, 320, 700, 500]),
+            ]
+            _assign_figure_numbers(blocks)
+            n = figure_merger.merge_split_figures(
+                blocks, pdf, Path(td), coord_space="mineru")
+            self.assertEqual(n, 1)
+            survivors = [b for b in blocks if b.kind == "image"]
+            self.assertEqual(len(survivors), 1)
+            self.assertTrue(survivors[0].content.startswith("Figure 33:"))
+
+    def test_different_numbers_not_consolidated(self):
+        # 不同图编号同页相邻：归并防线不动（blanco/madler 教训）
+        import figure_merger
+        with tempfile.TemporaryDirectory() as td:
+            pdf = self._pdf(td)
+            blocks = [
+                _img("a", caption="Fig. 5. " + "First figure caption. " * 3,
+                     page=0, bbox=[100, 100, 400, 380]),
+                _img("b", caption="Fig. 6. " + "Second figure caption. " * 3,
+                     page=0, bbox=[100, 400, 400, 700]),
+            ]
+            _assign_figure_numbers(blocks)
+            figure_merger.merge_split_figures(
+                blocks, pdf, Path(td), coord_space="paddleocr")
+            self.assertEqual(len([b for b in blocks if b.kind == "image"]), 2)
+
+
+class TestH3HeadingSplit(unittest.TestCase):
+    """C 修复：x.y.z 三级标题与正文粘连块的拆分（RSC 综述形态）。"""
+
+    def test_h3_split(self):
+        cl = [
+            {"type": "text", "text": "6.2 Strategies.", "page_idx": 44,
+             "text_level": 2},
+            {"type": "text", "page_idx": 45,
+             "text": "6.2.1 Observation of O redox process. Compared to the "
+                    "numerous ARR cases in LIBs, there are not sufficient "
+                    "pure prototypes for a comprehensive investigation."},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="Routes test")
+        heads = [b for b in blocks if b.kind == "heading"]
+        self.assertTrue(any(h.content.startswith("6.2.1 Observation of O redox")
+                            and h.level == 3 for h in heads),
+                        [(h.content[:30], h.level) for h in heads])
+        paras = [b for b in blocks if b.kind == "paragraph"]
+        self.assertTrue(any(p.content.startswith("Compared to the numerous")
+                            for p in paras))
+
+    def test_no_false_split(self):
+        # 版本号/小数形态不误拆：无"标题句. 正文"结构不命中
+        cl = [{"type": "text", "page_idx": 0,
+               "text": "In version 3.2.1 we fixed the bug and it was "
+                       "documented extensively in the changelog for users."}]
+        blocks = process_content(cl, "", use_llm=False, title="T")
+        self.assertFalse(any(b.kind == "heading" and "3.2.1" in b.content
+                             for b in blocks))
+
+
+class TestMathBraceRepair(unittest.TestCase):
+    """D 修复：数学段花括号多开失衡的尾补 }。"""
+
+    def test_unclosed_group_repaired(self):
+        from content_processor import _balance_math_braces
+        bad = (r"${\mathrm{{Na}}}_{0.7}{\left\lbrack {\mathrm{Fe}}_{0.2}"
+               r"\square _{0.2}\right\rbrack {\mathrm{O}}_{2}$")
+        fixed = _balance_math_braces(bad)
+        self.assertTrue(fixed.endswith("}}$"), fixed[-10:])
+
+    def test_balanced_untouched(self):
+        from content_processor import _balance_math_braces
+        good = r"$E = mc^{2}$ and $x_{1}$"
+        self.assertEqual(_balance_math_braces(good), good)
+
+    def test_over_closed_untouched(self):
+        from content_processor import _balance_math_braces
+        odd = r"$x}_{2}$"  # 多闭方向不修
+        self.assertEqual(_balance_math_braces(odd), odd)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,23 @@ class TestSplit(unittest.TestCase):
         entries = rp.split_reference_entries(blocks)
         self.assertEqual([e["n"] for e in entries], [1, 2])
 
+    def test_bare_number_entries_rsc_style(self):
+        # RSC 裸编号形态（wang2024 实测）："1 J. Y. Hwang, ..." 严格连号
+        blocks = _ref_blocks(
+            "1 J. Y. Hwang, S. T. Myung and Y. K. Sun, Chem. Soc. Rev., 2017, 46, 3529–3614.",
+            "2 X. Xiang, K. Zhang and J. Chen, Adv. Mater., 2015, 27, 5343–5364.",
+            "3 K. Kubota, N. Yabuuchi et al., Chem. Rev., 2018, 118, 459.")
+        entries = rp.split_reference_entries(blocks)
+        self.assertEqual([e["n"] for e in entries], [1, 2, 3])
+
+    def test_bare_number_rejects_page_number(self):
+        # 裸编号不连号（页码 390 伪起点）→ 不当新条目
+        blocks = _ref_blocks(
+            "1 A. Author, Title One, 2020, pp. 1–10. 390. VDI Verlag, Düsseldorf.")
+        entries = rp.split_reference_entries(blocks)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["n"], 1)
+
     def test_multi_entry_block_monotonic(self):
         # 单块多条目：按编号标记切；条目 2 正文里的 [5] 不单调递增，不误切
         blocks = _ref_blocks(

@@ -78,7 +78,33 @@ def _repair_script_frac(text: str) -> str:
     text = _BROKEN_SCRIPT_CLOSE_RE.sub(r"{\1\2", text)
     text = _BROKEN_SCRIPT_SLASH_RE.sub(r"_{\1/\2}", text)
     text = _BROKEN_RBRACE_SUP_RE.sub(r"$\1^", text)
-    return _MATHRM_WRAP_UNWRAP_RE.sub(r"\\mathrm{\1}", text)
+    text = _MATHRM_WRAP_UNWRAP_RE.sub(r"\\mathrm{\1}", text)
+    return _balance_math_braces(text)
+
+
+# 数学段花括号失衡修补（wang2024 实测：引擎把表格化学式输出为整体多一个
+# 开括号——"{\mathrm{Na}_{0.7}...{\mathrm{O}}_{2}" 末尾少一个 }，KaTeX
+# 拒渲染导致 LaTeX 源码外露）。只修"多开"方向且在段尾补 } 即平的形态；
+# 多闭/补不平一律不动
+_MATH_SEG_RE = re.compile(r"\$\$.*?\$\$|\$[^$\n]+?\$", re.S)
+
+
+def _balance_math_braces(text: str) -> str:
+    def _fix(m: re.Match) -> str:
+        seg = m.group(0)
+        if seg.startswith("$$"):
+            inner, pre, post = seg[2:-2], "$$", "$$"
+        else:
+            inner, pre, post = seg[1:-1], "$", "$"
+        bare = inner.replace("\\{", "").replace("\\}", "")
+        deficit = bare.count("{") - bare.count("}")
+        if 0 < deficit <= 3:
+            fixed = inner + "}" * deficit
+            fb = fixed.replace("\\{", "").replace("\\}", "")
+            if fb.count("{") == fb.count("}"):
+                return pre + fixed + post
+        return seg
+    return _MATH_SEG_RE.sub(_fix, text)
 
 
 # 引文上标化（"$^{[1-7]}" / "$^{[12]}" / "$^{[13b]}$"）回改契约形式（"[1-7]" 等）；
@@ -799,6 +825,20 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             if cleaned is None:
                 continue
             text = cleaned
+            # 三级标题形态（RSC 综述实测：x.y.z 短标题与正文粘连在同一块，
+            # 引擎不给 text_level）：编号三位点号 + 短标题句（≤80 字符、句号收尾）
+            # + 正文接续（大写起首 ≥40 字符）→ 拆为三级标题 + 正文段
+            h3_match = re.match(
+                r"^(\d+\.\d+\.\d+)\.?\s+([A-Z][^.\n]{4,80}?)\.\s+([A-Z(].{40,})$",
+                text, re.S)
+            if h3_match and _DOTTED_NUM_RE.match(text):
+                h3_title = f"{h3_match.group(1)} {h3_match.group(2).strip()}"
+                result.append(ProcessedBlock("heading", content=h3_title, level=3,
+                                             src_page=page_idx))
+                result.append(ProcessedBlock("paragraph",
+                                             content=h3_match.group(3).strip(),
+                                             src_page=page_idx))
+                continue
             # 检测是否是摘要段（"Abstract: ..." / "Conspectus: ..." 格式）
             abstract_match = re.match(r"^(?:abstract|conspectus)[:\.\s]+(.+)", text, re.IGNORECASE | re.DOTALL)
             if abstract_match:
@@ -1658,6 +1698,11 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
             # "Figure N:" 前缀，N 可带小数；分隔符冒号句号都剥，防 "Figure N: : ..."）
             cap = re.sub(r"^Fig(?:ure|\.)?\s*\d+(?:\.\d+)*\s*[\.\:]?\s*", "", main.caption or "").strip()
             main.content = f"Figure {num}: {cap}" if cap else f"Figure {num}"
+            # caption 同步为 "Figure N: ..." 前缀形态——figure_merger 的真图注
+            # 组界判定（_REAL_CAPTION_RE 读 caption 优先）靠它认出主块，
+            # 否则主块被当无注碎片、整组合并后图注随被丢块消失
+            # （wang2024 实测：Fig.3/12/33/40 主块被丢、只剩 fig3a 子图）
+            main.caption = main.content
 
     # --- 游离编号图注绑回（Blood/PNAS 式 "Figure N." 正文块 → 最近的未编号图组）---
     group_of = {}

@@ -27,16 +27,18 @@ from link_extractor import _REF_NUM_RE
 
 logger = logging.getLogger(__name__)
 
-# 条目起点（复用 _REF_NUM_RE 语义："[12] " / "12. " / "12) "）
+# 条目起点（复用 _REF_NUM_RE 语义："[12] " / "12. " / "12) " / "12 X. Y.,"）
 _ENTRY_START_RE = _REF_NUM_RE
-# 块内多条目的切分候选："[N] " 或 ". N. "，N 后须接大写字母/引号/括号
-# （条目首部是作者姓氏；挡掉 "citing [5] here" 这类条目正文里的引文），
-# 还须过编号单调递增闸门（参考文献天然有序）
+# 块内多条目的切分候选："[N] "（无序容忍双栏交错）；". N. " 与 ". N "（裸编号）
+# 须严格连号（挡页码/卷号伪起点，madler '390. VDI Verlag' 实测）
 _MARK_BRACKET_RE = re.compile(r"\[(\d{1,4})\]\s+(?=[A-Z\"'(])")
 _MARK_DOT_RE = re.compile(r"(?<=\.\s)(\d{1,4})\.\s+(?=[A-Z])")
-# 块首条目起点同样要求编号后接大写形态（防续行块以 [5] 引文开头被当成新条目）
+_MARK_BARE_RE = re.compile(r"(?<=\.\s)(\d{1,4})\s+(?=[A-Z])")
+# 块首条目起点同样要求编号后接大写形态（防续行块以 [5] 引文开头被当成新条目；
+# 裸编号形态 RSC 式 "1 J. Y. Hwang, ..."，wang2024 实测）
 _ENTRY_START_STRICT_RE = re.compile(
-    r"^\s*(?:\[(\d{1,4})\]\s+(?=[A-Z\"'(])|(\d{1,4})[.\)]\s+(?=[A-Z\"'(]))")
+    r"^\s*(?:\[(\d{1,4})\]\s+(?=[A-Z\"'(])|(\d{1,4})[.\)]\s+(?=[A-Z\"'(])"
+    r"|(\d{1,4})\s+(?=[A-Z]))")
 # DOI 确定性正则层（字符集明确，零幻觉）；尾部标点不在 DOI 内
 _DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>\[\]]+")
 _DOI_FULL_RE = re.compile(r"^10\.\d{4,9}/\S+$")
@@ -106,7 +108,7 @@ def split_reference_entries(blocks: list) -> list[dict]:
     无编号块并入上一条（悬挂缩进续行）；无历史条目时记 n=None。
     """
     entries: list[dict] = []
-    last_dot = 0  # 点号式（"N. "）条目须严格连号（跨块延续）；
+    last_dot = 0  # 点号式（"N. "）与裸编号（"N X. Y.,"）条目须严格连号（跨块延续）；
     # 括号式（"[N] "）不做连号要求——双栏文献列表被引擎交错输出时
     # 括号条目起点本就乱序（宇宙弦实测），由大写形态闸门防句中引文误切
     for b in blocks:
@@ -116,17 +118,24 @@ def split_reference_entries(blocks: list) -> list[dict]:
         if not text:
             continue
         # 收集切分点：块首（严格形态）+ 块内编号标记
-        marks = []  # (位置, n, 是否点号式)
+        marks = []  # (位置, n, 是否连号式)
         m0 = _ENTRY_START_STRICT_RE.match(text)
         if m0:
             if m0.group(1) is not None:
                 marks.append((0, int(m0.group(1)), False))
-            elif int(m0.group(2)) == last_dot + 1:
+            elif m0.group(2) is not None and int(m0.group(2)) == last_dot + 1:
                 marks.append((0, int(m0.group(2)), True))
+            elif m0.group(3) is not None and int(m0.group(3)) == last_dot + 1:
+                marks.append((0, int(m0.group(3)), True))
         for m in _MARK_BRACKET_RE.finditer(text):
             if m.start() > 0:
                 marks.append((m.start(), int(m.group(1)), False))
         for m in _MARK_DOT_RE.finditer(text):
+            pos = m.start(1)
+            if int(m.group(1)) == last_dot + 1 \
+                    and all(pos != mk[0] for mk in marks):
+                marks.append((pos, int(m.group(1)), True))
+        for m in _MARK_BARE_RE.finditer(text):
             pos = m.start(1)
             if int(m.group(1)) == last_dot + 1 \
                     and all(pos != mk[0] for mk in marks):

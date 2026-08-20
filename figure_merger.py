@@ -120,6 +120,37 @@ def merge_split_figures(blocks, pdf_path, images_dir, dpi=_RENDER_DPI, coord_spa
 
     # 就近成组（不依赖图编号——编号可能错，位置不会）
     runs = _proximity_runs(blocks)
+    # 同图碎片的跨 run 归并：同页同图编号的多个 run 是同一 Figure 被文字块
+    # 打断的碎片（wang2024 实测：fig33 被拆成两个 run，归并后只剩半张 fig33e；
+    # fig40a 碎图泄漏）。不同编号永不归并（blanco/madler 的相邻独立图防线不动）
+    if len(runs) > 1:
+        by_stem: dict[tuple, list] = {}
+        for run in runs:
+            pages = {b.page_idx for b in run}
+            stems = set()
+            for b in run:
+                sm = _FIG_STEM_RE.match(b.img_new_name or "")
+                if sm:
+                    stems.add(sm.group(1))
+            if len(pages) == 1 and len(stems) == 1:
+                by_stem.setdefault((next(iter(pages)), next(iter(stems))), []).append(run)
+        merged_runs = []
+        used = set()
+        for run in runs:
+            pages = {b.page_idx for b in run}
+            stems = {_FIG_STEM_RE.match(b.img_new_name or "").group(1)
+                     for b in run if _FIG_STEM_RE.match(b.img_new_name or "")}
+            key = (next(iter(pages)), next(iter(stems))) if len(pages) == 1 and len(stems) == 1 else None
+            if key and len(by_stem.get(key, [])) > 1:
+                if key in used:
+                    continue  # 已归并进前一同 stem run
+                combined = [b for r in by_stem[key] for b in r]
+                used.add(key)
+                merged_runs.append(combined)
+                logger.info(f"  同图碎片归并: {key[1]}（{len(by_stem[key])} 段，共 {len(combined)} 块）")
+            else:
+                merged_runs.append(run)
+        runs = merged_runs
     if not runs:
         return 0
 
