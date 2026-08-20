@@ -204,6 +204,33 @@ def _check_page_completeness(body: str, pdf_pages: int | None) -> list[str]:
     return []
 
 
+def _check_references_nonempty(body: str) -> list[str]:
+    """参考文献区存在但为空 → 严重级（条目在管线中丢失的可探测信号；
+    forecast 实测：引擎以 list/ref_text 形态产出了全部条目，下游不认识
+    静默丢弃，paper.md 里 # References 标题下是空的——断号检查抓不住）。
+    """
+    m_ref = _REF_HEADING_RE.search(body)
+    if not m_ref:
+        return []
+    section = body[m_ref.end():]
+    m_next = re.search(r"^#{1,6}\s+\S", section, re.M)
+    if m_next:
+        section = section[:m_next.start()]
+    lines = []
+    for ln in section.splitlines():
+        ln = ln.strip()
+        if not ln or ln.startswith("<!--"):
+            continue
+        # 剥掉行首锚点标记（<a id="ref-N"></a>[1] ... 的条目行）再判空
+        ln = re.sub(r'^(?:<a id="[^"]+"></a>\s*)+', "", ln).strip()
+        if ln:
+            lines.append(ln)
+    if not lines:
+        return ["参考文献区为空：存在 References 标题但无任何条目"
+                "（疑似条目在管线中丢失）"]
+    return []
+
+
 def qc_severe_findings(paper_md_path: Path, pdf_pages: int | None) -> list[str]:
     """完整性级（严重）检查：图/表编号断号 + 页数明显不足。返回严重问题列表。
 
@@ -222,5 +249,6 @@ def qc_severe_findings(paper_md_path: Path, pdf_pages: int | None) -> list[str]:
     severe: list[str] = []
     # 图/表断号直接复用 WARN 级同一检查：断号即内容缺失，全部算严重级
     severe += _check_fig_table_continuity(body)
+    severe += _check_references_nonempty(body)
     severe += _check_page_completeness(body, pdf_pages)
     return severe

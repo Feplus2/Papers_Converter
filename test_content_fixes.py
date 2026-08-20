@@ -285,5 +285,42 @@ class TestFootnotePandoc(unittest.TestCase):
         self.assertIn("[^6]: Note that, the direction of degeneracy.", text)
 
 
+class TestRefTextListBlocks(unittest.TestCase):
+    """list + sub_type:ref_text 块映射（forecast 零丢失事故原形）。"""
+
+    def test_ref_text_list_items_become_references(self):
+        cl = [
+            {"type": "text", "text": "Body text ends here.", "page_idx": 24,
+             "text_level": 1},
+            {"type": "list", "sub_type": "ref_text", "page_idx": 24,
+             "list_items": ["[1] T. W. B. Kibble, J. Phys. A 9, 1387 (1976).",
+                            "[2] A. Vilenkin and E. P. S. Shellard, Cosmic Strings."]},
+            {"type": "list", "sub_type": "ref_text", "page_idx": 25,
+             "list_items": ["[3] S. Sarangi and S. H. H. Tye, Phys. Lett. B 536."]},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="Forecast test")
+        refs = [b for b in blocks if b.kind == "reference"]
+        self.assertEqual(len(refs), 3)
+        self.assertEqual(refs[0].content[:4], "[1] ")
+        self.assertEqual(refs[0].src_page, 24)
+        self.assertEqual(refs[2].src_page, 25)
+        # 条目编号与 split_reference_entries/#ref-N 同源
+        import reference_parser as rp
+        entries = rp.split_reference_entries(blocks)
+        self.assertEqual([e["n"] for e in entries], [1, 2, 3])
+
+    def test_non_ref_list_text_preserved(self):
+        # 其他 sub_type（itemize 正文列表）逐条段落保底，不整块丢弃
+        cl = [
+            {"type": "text", "text": "We list the assumptions.", "page_idx": 0},
+            {"type": "list", "sub_type": "itemize", "page_idx": 0,
+             "list_items": ["First assumption holds.", "Second assumption fails."]},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="List test")
+        texts = [b.content for b in blocks if b.kind == "paragraph"]
+        self.assertIn("First assumption holds.", texts)
+        self.assertIn("Second assumption fails.", texts)
+
+
 if __name__ == "__main__":
     unittest.main()

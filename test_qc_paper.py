@@ -78,5 +78,46 @@ class TestContinuityEndToEnd(unittest.TestCase):
         self.assertEqual(_check_fig_table_continuity(body), [])
 
 
+class TestEmptyReferencesSevere(unittest.TestCase):
+    """forecast 事故：References 标题存在但条目零 → 严重级发现。"""
+
+    def test_empty_references_is_severe(self):
+        import tempfile
+        from pathlib import Path
+        from qc_paper import qc_severe_findings, qc_paper_md
+        body = ("---\ntitle: T\n---\n# Intro\n\nBody text.\n\n# References\n")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "paper.md"
+            p.write_text(body, encoding="utf-8")
+            severe = qc_severe_findings(p, 5)
+        self.assertTrue(any("参考文献区为空" in s for s in severe), severe)
+
+    def test_nonempty_references_quiet(self):
+        import tempfile
+        from pathlib import Path
+        from qc_paper import qc_severe_findings
+        body = ("---\ntitle: T\n---\n# Intro\n\nBody.\n\n# References\n\n"
+                "<a id=\"ref-1\"></a>[1] X. Author, T., 2020.\n\n"
+                "[2] Y. Author, U., 2021.\n")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "paper.md"
+            p.write_text(body, encoding="utf-8")
+            severe = qc_severe_findings(p, 5)
+        self.assertFalse(any("参考文献区为空" in s for s in severe), severe)
+
+    def test_apa_unnumbered_references_quiet(self):
+        # APA 无编号条目流（madler 形态）不命中空文献区
+        import tempfile
+        from pathlib import Path
+        from qc_paper import qc_severe_findings
+        body = ("---\ntitle: T\n---\n# Intro\n\nBody.\n\n# References\n\n"
+                "Abramovich, G. N. (1963). The theory of turbulent jets.\n")
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "paper.md"
+            p.write_text(body, encoding="utf-8")
+            severe = qc_severe_findings(p, 5)
+        self.assertFalse(any("参考文献区为空" in s for s in severe), severe)
+
+
 if __name__ == "__main__":
     unittest.main()

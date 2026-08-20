@@ -542,8 +542,9 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             current_page = page_idx
             result.append(ProcessedBlock("page_anchor", content=str(page_idx + 1), page_idx=page_idx))
 
-        # 跳过空文本块（非图片/公式/表格）
-        if not text and block_type not in ("image", "chart", "equation", "table"):
+        # 跳过空文本块（非图片/公式/表格/列表——list 块文本在 list_items 数组里，
+        # 没有 text 字段，曾被此处静默丢弃：forecast 整个文献区丢失事故）
+        if not text and block_type not in ("image", "chart", "equation", "table", "list"):
             continue
 
         # --- Heading ---
@@ -592,6 +593,24 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
                 result.append(nb)
                 if n is not None:
                     last_footnote = nb
+            continue
+
+        # --- 列表块 ---
+        # list 块携 list_items 数组（引擎/后端 schema 差异形态；forecast 实测
+        # 整个文献区是 list+sub_type:ref_text，曾整块静默丢弃——零丢失事故）。
+        # ref_text 或处于文献区：每个 item 一条 reference；其他 sub_type
+        # （itemize/enumerate 正文列表，语料未见）逐条落成段落，文本保底
+        if block_type == "list":
+            for item in block.get("list_items") or []:
+                it = _normalize_inline((item or "").strip())
+                if not it:
+                    continue
+                if block.get("sub_type") == "ref_text" or in_references:
+                    result.append(ProcessedBlock("reference", content=it,
+                                                 src_page=page_idx))
+                else:
+                    result.append(ProcessedBlock("paragraph", content=it,
+                                                 src_page=page_idx))
             continue
 
         # --- 参考文献 ---
