@@ -439,6 +439,75 @@ def _parse_dest_string(dest: str, page_height: float) -> tuple[float, float] | N
     return None  # /Fit /FitB /FitBH 等无确定目标点，交由同号唯一兜底
 
 
+def _split_math_core(core: str, label: str) -> str | None:
+    """证据驱动剥离的核心判定：数学段芯 core 以"编号 + 尾部闭括号/空白"收尾时
+    拆出编号，返回剥离后的段芯；否则 None。
+
+    判定（全满足才拆，绝不凭猜）：段芯去掉尾部 }/空白后以 label 数字收尾；
+    剥离后余部非空、以数字或 } 结尾、花括号仍平衡（如 'f^{-4/32}' →
+    'f^{-4/3}'；'$x^2$' 的芯 'x^2' 剥掉 2 余 'x^' 以 ^ 结尾 → 不拆）。
+    """
+    m = re.search(r"[\}\s]*$", core)
+    body, tail = core[:m.start()], core[m.start():]
+    if not body.endswith(label):
+        return None
+    rest_body = body[:-len(label)]
+    if not rest_body or rest_body[-1] not in "0123456789}":
+        return None
+    rest = rest_body + tail
+    bare = rest.replace("\\{", "").replace("\\}", "")
+    if bare.count("{") != bare.count("}"):
+        return None
+    return rest
+
+
+def _find_swallowed_marker(lk: "_Link", label: str, blocks: list,
+                           aligner: "_Aligner"):
+    """证据驱动剥离的落点找回（forecast eq12：上标脚注标记被引擎吞进数学段
+    尾部，f^{-4/3}² → 块内 $f^{-4/32}$，标记在等值段外无法对齐）。
+
+    双证据：①块的对齐文本（等值段）终点紧邻链接标记（页骨架坐标差 ≤3）；
+    ②该终点落在某数学段内，且段芯以编号 label 收尾、剥掉后余部非空、
+    以数字或 } 结尾、花括号仍平衡。返回 (块下标, 段起, 段止, 剥离后余部)，
+    任一条件不满足 → None（绝不凭猜拆数学）。
+    """
+    page = aligner.pages[lk.page]
+    if page is None:
+        return None
+    s0 = _raw_to_skel(page, lk.c0, forward=True)
+    if s0 is None:
+        return None
+    for idx, b in enumerate(blocks):
+        if b.kind not in _INJECTABLE_KINDS:
+            continue
+        if getattr(b, "src_page", None) not in (lk.page, lk.page - 1):
+            continue
+        bm = aligner.block_map(idx)
+        if bm is None:
+            continue
+        if lk.page == bm.frame_page:
+            f0 = s0
+        elif bm.page1_off is not None and lk.page == bm.frame_page + 1:
+            f0 = bm.page1_off + s0
+        else:
+            continue
+        for a, b_, sz in bm.segs:
+            end_f = a + sz          # 等值段页侧终点（不含）
+            if not (0 <= f0 - end_f <= 3):
+                continue
+            end_b = b_ + sz - 1     # 等值段块侧末字符
+            if not (0 <= end_b < len(bm.b2o)):
+                continue
+            bo = bm.b2o[end_b]
+            for m in _MATH_SPAN_RE.finditer(b.content or ""):
+                if not (m.start() <= bo < m.end()):
+                    continue
+                rest = _split_math_core(m.group(0)[1:-1], label)
+                if rest is not None:
+                    return idx, m.start(), m.end(), rest
+    return None
+
+
 def _place_unique_citation(lk: _Link, num: str, blocks: list,
                            math_spans: dict):
     """上标引文兜底落位：源页候选块内 "[num]" 恰好唯一出现 → (块下标, o0, o1)；
@@ -1036,6 +1105,7 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
         # 目标映射 + 校验（URI 白名单兜底要看落在哪种块里）
         target, cat = _resolve(lk, blocks[placed[0]].kind if placed else None)
         fn_whole_math = False
+        fn_replacement = None
         if placed is None and math_hit is not None and target is not None \
                 and target.startswith("fn:"):
             # 脚注标记被引擎归一为 $^{N}$ 数学段：整段替换为 [^N]
@@ -1049,6 +1119,16 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                     if inner and inner.group(1) == label:
                         placed = (bidx, m.start(), m.end())
                         fn_whole_math = True
+                    elif label.isdigit():
+                        # 证据驱动剥离（forecast eq12 实测）：脚注链接注释精确
+                        # 覆盖的上标数字被引擎吞进数学段尾部（f^{-4/3}² →
+                        # f^{-4/32}$）。仅当：fn 目标已验证 + 落点在数学段内 +
+                        # 段芯以编号+闭括号收尾 + 剥离后形态合法——才拆出
+                        rest = _split_math_core(m.group(0)[1:-1], label)
+                        if rest is not None:
+                            placed = (bidx, m.start(), m.end())
+                            fn_whole_math = True
+                            fn_replacement = f"${rest}$[^{label}]"
                     break
         if target is not None and placed is not None and target.startswith("fn:") \
                 and not fn_whole_math:
@@ -1068,6 +1148,18 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                     placed = (bidx, o0, o1)
             elif sub != label:
                 target = None  # 符号标记无法字符级对齐 → 放弃（定义保持原样）
+        if placed is None and target is not None and target.startswith("fn:") \
+                and target[3:].isdigit():
+            # 证据驱动剥离的落点找回：标记被吞进数学尾部时它在块内对不齐
+            # （等值段外），改用"对齐文本终点紧邻标记 + 数学段芯以编号收尾"
+            # 双证据定位（forecast eq12 f^{-4/32} 实测形态）
+            label = target[3:]
+            hit = _find_swallowed_marker(lk, label, blocks, aligner)
+            if hit is not None:
+                bidx, m_start, m_end, rest = hit
+                placed = (bidx, m_start, m_end)
+                fn_whole_math = True
+                fn_replacement = f"${rest}$[^{label}]"
         if placed is None and target is not None and cat == "ref" \
                 and (lk.dest_name.startswith("cite.")
                      or bool(_PUB_DEST_RE.search(lk.dest_name or ""))):
@@ -1082,9 +1174,11 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             cluster_pending.setdefault(lk.cluster, []).append((placed, target, cat))
             continue
         if target is not None and placed is not None:
-            inj = [placed[1], placed[2], target, cat]
-            if target.startswith("fn:") and lk.fn_target >= 0:
-                inj.append(lk.fn_target)  # 符号脚注 label 在应用阶段落块
+            # 元组定长 6 元：[o0, o1, target, cat, fn_target, replacement]
+            # （编号脚注不走符号 label 落块；replacement 仅证据驱动剥离用）
+            inj = [placed[1], placed[2], target, cat,
+                   lk.fn_target if target.startswith("fn:") else -1,
+                   fn_replacement]
             injections.setdefault(placed[0], []).append(inj)
             _stat(cat, True)
         else:
@@ -1130,7 +1224,11 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                     slot[1] += 1
                 continue
             if target.startswith("fn:"):
-                content = content[:o0] + "[^" + target[3:] + "]" + content[o1:]
+                if len(inj) > 5 and inj[5] is not None:
+                    # 证据驱动剥离：自定义替换文本（如 "$f^{-4/3}$" + "[^2]"）
+                    content = content[:o0] + inj[5] + content[o1:]
+                else:
+                    content = content[:o0] + "[^" + target[3:] + "]" + content[o1:]
                 if len(inj) > 4 and not target[3:].isdigit():
                     # 符号脚注：引用点真正写入才把定义段标成同号 label（防孤儿）
                     blocks[inj[4]].note_label = target[3:]

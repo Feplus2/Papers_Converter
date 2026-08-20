@@ -571,6 +571,110 @@ class TestFootnoteLinks(unittest.TestCase):
         self.assertEqual(blocks[0].content, "text5 marker.")
         self.assertEqual(res.stats.get("fn"), [0, 1])
 
+    def test_math_swallowed_marker_split(self):
+        # forecast eq12 原形：PDF 文本是 "...f^{-4/3}2 after"（2 为上标脚注标记，
+        # 带链接），引擎归一成 $f^{-4/32}$ → 证据驱动剥离为 $f^{-4/3}$[^2]
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "in proportion to f^{-4/3}2 after the burst.",
+                         fontsize=11)
+        page.insert_text((72, 700), "2 Strictly speaking, Eq. (12) is valid.",
+                         fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("}2") + 1  # 数学尾部被吞的 "2"
+        links = [le._Link(0, c0, c0 + 1, "2", dest_name="Hfootnote.3",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph",
+            content="in proportion to $f^{-4/32}$ after the burst.", src_page=0),
+            self._fn_block(2, "Strictly speaking, Eq. (12) is valid.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(
+            blocks[0].content,
+            "in proportion to $f^{-4/3}$[^2] after the burst.")
+        self.assertEqual(res.stats.get("fn"), [1, 0])
+
+    def test_no_split_for_real_exponent(self):
+        # 真指数 $x^2$：前置字符是 ^（非数字/}）→ 绝不拆
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "the growth x2 after the burst.", fontsize=11)
+        page.insert_text((72, 700), "2 Strictly speaking, Eq. (12) is valid.",
+                         fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("x2") + 1
+        links = [le._Link(0, c0, c0 + 1, "2", dest_name="Hfootnote.3",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph", content="the growth $x^2$ after the burst.", src_page=0),
+            self._fn_block(2, "Strictly speaking, Eq. (12) is valid.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "the growth $x^2$ after the burst.")
+        self.assertEqual(res.stats.get("fn"), [0, 1])
+
+    def test_no_renumber_when_not_bijection(self):
+        # 锚定保守策略：marker 2 缺失（被吞/未定位）时定义编号保持原样，
+        # 绝不整体重排（[^3] 不得变 [^2]）
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "text one1 and three3 end.", fontsize=11)
+        page.insert_text((72, 690), "1 First note.", fontsize=11)
+        page.insert_text((72, 710), "3 Third note.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        links = []
+        for digit, dest, dy in (("1", "Hfootnote.2", 690.0),
+                                ("3", "Hfootnote.4", 710.0)):
+            c0 = pages[0].raw.find("one" + digit) + 3 if digit == "1" \
+                else pages[0].raw.find("three" + digit) + 5
+            links.append(le._Link(0, c0, c0 + 1, digit, dest_name=dest,
+                                  dest_page=0, dest_x=72.0, dest_y=dy))
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock("paragraph",
+                                 content="text one1 and three3 end.", src_page=0),
+                  self._fn_block(1, "First note."),
+                  self._fn_block(2, "Second note (marker lost)."),
+                  self._fn_block(3, "Third note.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertIn("[^1]", blocks[0].content)
+        self.assertIn("[^3]", blocks[0].content)  # 不重排
+        self.assertEqual([b.note_num for b in blocks[1:]], [1, 2, 3])
+
     def test_fn_symbol_map(self):
         b = ProcessedBlock("footnote", content="\\* Electronic address: a@b.c")
         self.assertEqual(le._footnote_symbol_of(b), "*")
