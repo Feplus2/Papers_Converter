@@ -119,5 +119,56 @@ class TestEmptyReferencesSevere(unittest.TestCase):
         self.assertFalse(any("参考文献区为空" in s for s in severe), severe)
 
 
+class TestEquationIntegrity(unittest.TestCase):
+    """公式结构完整性检查（forecast eq57 截断事故原形；只报近乎确定损坏）。"""
+
+    def _run(self, eq: str):
+        from qc_paper import _check_equation_integrity
+        return _check_equation_integrity(f"$$\n{eq}\n$$\n")
+
+    def test_frac_truncated_fires(self):
+        # forecast eq57 原形：\frac 第二参数落在 \end 上
+        w = self._run(r"\begin{array}{l} x = ( \frac \Omega \end{array}\tag{57}")
+        self.assertTrue(any("\\frac" in s and "57" in s for s in w), w)
+
+    def test_frac_at_block_end_fires(self):
+        w = self._run(r"x = \frac")
+        self.assertTrue(any("\\frac" in s for s in w), w)
+
+    def test_legal_frac_forms_quiet(self):
+        for eq in (r"\frac{1}{2}", r"\frac12", r"\frac\Omega\chi",
+                   r"\dfrac{a}{b} + \binom{n}{k}"):
+            self.assertEqual(self._run(eq), [], eq)
+
+    def test_brace_imbalance_fires(self):
+        w = self._run(r"x = {a + b \tag{1}")
+        self.assertTrue(any("花括号" in s for s in w), w)
+
+    def test_escaped_braces_not_counted(self):
+        self.assertEqual(self._run(r"x = \{ a \}"), [])
+
+    def test_begin_end_mismatch_fires(self):
+        w = self._run(r"\begin{array}{l} x \end{split}")
+        self.assertTrue(any("begin" in s for s in w), w)
+
+    def test_left_right_forms(self):
+        self.assertTrue(any("left" in s for s in self._run(r"\left( x \tag{1}")),)
+        self.assertEqual(self._run(r"\left\{ x \right."), [])  # 右空定界符合法
+        self.assertEqual(self._run(r"\left( x \right)"), [])
+
+    def test_tag_inside_env_fires(self):
+        w = self._run(r"\begin{split} x = 1 \tag{3} \\ y = 2 \end{split}")
+        self.assertTrue(any("环境内部" in s for s in w), w)
+
+    def test_tag_after_end_quiet(self):
+        self.assertEqual(self._run(r"\begin{array}{l} x = 1 \end{array}\tag{3}"), [])
+
+    def test_complete_multibranch_quiet(self):
+        # forecast eq56 形态的完整分段公式（\right. 收尾 + \tag 在环境外）
+        eq = (r"x = \left\{ \begin{array}{l} a \quad ; h < h_1 \\ "
+              r"\frac{b}{c} \quad ; h > h_1 \end{array} \right. ,\tag{56}")
+        self.assertEqual(self._run(eq), [])
+
+
 if __name__ == "__main__":
     unittest.main()

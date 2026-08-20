@@ -204,6 +204,65 @@ def _check_page_completeness(body: str, pdf_pages: int | None) -> list[str]:
     return []
 
 
+# ============================================================
+# 公式结构完整性（严重级）：引擎偶发把长多分支分段公式截断输出
+# （forecast eq57 实测："...( \frac \Omega \end{array}\tag{57}"——\frac 的
+# 第二参数落到 \end 上，KaTeX 编译报错红显）。只报近乎确定损坏的形态，
+# 拿不准的一律不报（合法形态如 \left\{ ... \right. 右空定界符不算失衡）
+# ============================================================
+_EQ_BLOCK_RE = re.compile(r"\$\$\n?(.*?)\n?\$\$", re.S)
+_EQ_TAG_FIND_RE = re.compile(r"\\tag\*?\{([^{}]*)\}")
+# \frac 族的第二参数落在 \end/\begin/\\/块尾 → 必坏（\frac12、\frac\Omega\chi
+# 这类单 token 参数是合法 LaTeX，不报）
+_EQ_FRAC_BROKEN_RE = re.compile(
+    r"\\(?:frac|dfrac|tfrac|cfrac|binom)\s*"
+    r"(?:\{(?:[^{}]|\{[^{}]*\})*\}|\\[A-Za-z]+|[^\s\\{])?\s*"  # 参数1（可缺省=块尾截断）
+    r"(?:\\(?:end|begin)\b|\\\\|$)")  # 参数2 落在结构标记/块尾 → 必坏
+
+
+def _check_equation_integrity(body: str) -> list[str]:
+    """展示公式块的结构校验（严重级）。返回问题列表。"""
+    out = []
+    for m in _EQ_BLOCK_RE.finditer(body):
+        eq = m.group(1)
+        tag_m = _EQ_TAG_FIND_RE.search(eq)
+        label = f"\\tag{{{tag_m.group(1)}}}" if tag_m else "（无编号）"
+        issues = []
+        # 花括号配对（\{ \} 转义不计）
+        stripped = eq.replace("\\{", "").replace("\\}", "")
+        nl, nr = stripped.count("{"), stripped.count("}")
+        if nl != nr:
+            issues.append(f"花括号不配对（{{ 有 {nl} 个，}} 有 {nr} 个）")
+        # \begin/\end 配对（按环境名计数对账）
+        begins = re.findall(r"\\begin\{(\w+\*?)\}", eq)
+        ends = re.findall(r"\\end\{(\w+\*?)\}", eq)
+        if sorted(begins) != sorted(ends):
+            issues.append(f"\\begin/\\end 不配对（begin={begins} end={ends}）")
+        # \left/\right 配对（\right. 空定界符也被 \right 计数覆盖，合法）
+        nleft = len(re.findall(r"\\left(?![a-zA-Z])", eq))
+        nright = len(re.findall(r"\\right(?![a-zA-Z])", eq))
+        if nleft != nright:
+            issues.append(f"\\left/\\right 不配对（{nleft}/{nright}）")
+        # \frac 族参数组缺失/落在结构标记上
+        if _EQ_FRAC_BROKEN_RE.search(eq):
+            issues.append("\\frac 族命令参数组缺失（疑似公式截断）")
+        # \tag 出现在环境内部（应在 \end 之后）
+        stack = []
+        for tm in re.finditer(r"\\(begin|end)\{\w+\*?\}|\\tag\*?\{", eq):
+            tok = tm.group(0)
+            if tok.startswith("\\begin"):
+                stack.append(tok)
+            elif tok.startswith("\\end"):
+                if stack:
+                    stack.pop()
+            elif stack:
+                issues.append("\\tag 出现在环境内部")
+                break
+        for issue in issues:
+            out.append(f"公式结构疑似损坏（{label}）: {issue}")
+    return out
+
+
 def _check_references_nonempty(body: str) -> list[str]:
     """参考文献区存在但为空 → 严重级（条目在管线中丢失的可探测信号；
     forecast 实测：引擎以 list/ref_text 形态产出了全部条目，下游不认识
@@ -249,6 +308,7 @@ def qc_severe_findings(paper_md_path: Path, pdf_pages: int | None) -> list[str]:
     severe: list[str] = []
     # 图/表断号直接复用 WARN 级同一检查：断号即内容缺失，全部算严重级
     severe += _check_fig_table_continuity(body)
+    severe += _check_equation_integrity(body)
     severe += _check_references_nonempty(body)
     severe += _check_page_completeness(body, pdf_pages)
     return severe
