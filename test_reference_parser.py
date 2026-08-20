@@ -162,21 +162,21 @@ class TestBuildReferences(unittest.TestCase):
         self.assertIsNone(refs[0]["doi"])
 
     def test_count_mismatch_degrades(self):
-        # LLM 只回 1 条（规则切分 2 条，差 50% > 20%）→ 整段降级 title=raw
+        # LLM 只回 1 条（规则切分 2 条，差 50% > 20%）→ 整段降级；
+        # 降级 title 置 None（绝不 raw 复读），DOI 正则层仍生效
         rp._llm_extract = lambda e, use_llm: [
             {"n": 1, "title": "Only One", "authors": [], "year": 2005,
              "venue": "Nature", "doi": None}]
         refs, source = rp.build_references(self.entries * 3, use_llm=True)
         self.assertEqual(source, "rule")
-        self.assertTrue(all(r["title"] == r["raw"] for r in refs))
-        # 降级模式 DOI 正则层仍然生效
+        self.assertTrue(all(r["title"] is None for r in refs))
         self.assertEqual(refs[0]["doi"], "10.1038/nature04236")
 
     def test_llm_failure_degrades(self):
         rp._llm_extract = lambda e, use_llm: None
         refs, source = rp.build_references(self.entries, use_llm=True)
         self.assertEqual(source, "rule")
-        self.assertEqual(refs[0]["title"], self.entries[0]["raw"])
+        self.assertIsNone(refs[0]["title"])
         self.assertEqual(refs[1]["year"], 2011)  # 规则年份尽力而为
 
     def test_no_llm_flag(self):
@@ -207,6 +207,62 @@ class TestEndToEnd(unittest.TestCase):
     def test_no_references_no_file(self):
         blocks = [ProcessedBlock("paragraph", content="Just body text.")]
         self.assertIsNone(rp.prepare_references(blocks, use_llm=False))
+
+
+class TestArxivAndTitleHygiene(unittest.TestCase):
+    """arxiv_id 确定性抽取 + title 卫生（forecast 实测质量崩溃修复）。"""
+
+    def test_arxiv_new_format(self):
+        self.assertEqual(
+            rp.extract_arxiv("[1] X. Y., Living Rev. Rel. 24, 4 (2021), "
+                             "arXiv:2011.12414 [gr-qc]."),
+            "2011.12414")
+        self.assertEqual(
+            rp.extract_arxiv("... arXiv:2605.22944v1 [astro-ph.CO]."),
+            "2605.22944")
+
+    def test_arxiv_old_format(self):
+        # forecast entry[3] 真实形态
+        self.assertEqual(
+            rp.extract_arxiv('[3] S. Sarangi and S. H. H. Tye, Phys. Lett. B '
+                             '536, 185 (2002) [arXiv:hep-th/0204074].'),
+            "hep-th/0204074")
+        self.assertIsNone(rp.extract_arxiv("[1] T. W. B. Kibble, J. Phys. A 9, "
+                                           "1387 (1976)."))
+
+    def test_title_strips_enum_prefix(self):
+        self.assertEqual(rp._clean_title("[12] Some Real Title", "raw"),
+                         "Some Real Title")
+        self.assertEqual(rp._clean_title("12. Some Real Title", "raw"),
+                         "Some Real Title")
+
+    def test_title_arxiv_bracket_truncated(self):
+        self.assertEqual(
+            rp._clean_title("Cosmic Strings and More [arXiv:hep-th/0204074]",
+                            "raw"),
+            "Cosmic Strings and More")
+        # 截断后只剩碎片 → None
+        self.assertIsNone(rp._clean_title("Ab [arXiv:2011.12414]", "raw"))
+
+    def test_title_raw_repeat_becomes_none(self):
+        raw = "[1] T. W. B. Kibble, J. Phys. A 9, 1387 (1976)."
+        self.assertIsNone(rp._clean_title(raw, raw))
+        self.assertIsNone(rp._clean_title("", raw))
+        self.assertIsNone(rp._clean_title(None, raw))
+
+    def test_forecast_real_raws(self):
+        # forecast 真实 raw 两条：LLM 返回正常 title 时卫生不破坏、
+        # arxiv_id 正则兜住；LLM 失败降级时 title=None 但 arxiv_id 仍在
+        entries = [
+            {"n": 1, "raw": "[1] T. W. B. Kibble, J. Phys. A 9, 1387 (1976)."},
+            {"n": 3, "raw": "[3] S. Sarangi and S. H. H. Tye, Phys. Lett. B 536, "
+                            "185 (2002) [arXiv:hep-th/0204074]."},
+        ]
+        refs, source = rp.build_references(entries, use_llm=False)
+        self.assertEqual(source, "rule")
+        self.assertIsNone(refs[0]["title"])
+        self.assertIsNone(refs[0]["arxiv_id"])
+        self.assertEqual(refs[1]["arxiv_id"], "hep-th/0204074")
 
 
 if __name__ == "__main__":

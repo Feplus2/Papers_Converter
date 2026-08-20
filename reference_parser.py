@@ -41,6 +41,10 @@ _ENTRY_START_STRICT_RE = re.compile(
 _DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"'<>\[\]]+")
 _DOI_FULL_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _DOI_TAIL = ".,;:"
+# arXiv 编号确定性正则层（新式 2011.12414 / 旧式 hep-th/0204074，
+# 可带子类 astro-ph.CO；版本号 vN 不收——canonical 匹配用裸号）
+_ARXIV_NEW_RE = re.compile(r"arXiv:\s*(\d{4}\.\d{4,5})(?:v\d+)?", re.I)
+_ARXIV_OLD_RE = re.compile(r"arXiv:\s*([a-z\-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?", re.I)
 # 规则降级模式的年份提取（1990-2099 的独立四位数）
 _YEAR_RE = re.compile(r"(?<![\d./])((?:19|20)\d{2})(?!\d)")
 
@@ -58,6 +62,38 @@ def extract_doi(raw: str) -> str | None:
     while doi.endswith(")") and doi.count(")") > doi.count("("):
         doi = doi[:-1]
     return doi or None
+
+
+def extract_arxiv(raw: str) -> str | None:
+    """从条目原文确定性提取 arXiv 编号（新式 2011.12414 优先，
+    旧式 hep-th/0204074 兜底；版本号 vN 不收）。"""
+    m = _ARXIV_NEW_RE.search(raw or "")
+    if m:
+        return m.group(1)
+    m = _ARXIV_OLD_RE.search(raw or "")
+    return m.group(1) if m else None
+
+
+def _clean_title(title, raw: str) -> str | None:
+    """title 卫生：剥 [N]/N. 枚举前缀；arXiv 括号段及其后一切截掉（标识符
+    不是标题的一部分）；剥完为空、或与 raw 复读一致 → None（宁缺毋滥，
+    绝不把整条 raw 塞进 title）。"""
+    t = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not t:
+        return None
+    t = re.sub(r"^\s*(?:\[\d{1,4}\]|\d{1,4}[.\)])\s+", "", t)  # 枚举前缀
+    t = re.split(r"\[\s*arXiv\s*:", t, flags=re.I)[0]         # [arXiv:...] 截断
+    t = t.strip().strip('"').strip()
+    t = t.rstrip(".,;:[]() \t\"'")
+    if len(t) < 4:
+        return None
+    # raw 复读判定：raw 过同款前缀/尾部清洗后仍一致 → 不是真标题
+    r = re.sub(r"\s+", " ", raw).strip()
+    r = re.sub(r"^\s*(?:\[\d{1,4}\]|\d{1,4}[.\)])\s+", "", r)
+    r = re.split(r"\[\s*arXiv\s*:", r, flags=re.I)[0].strip().rstrip(".,;:[]() \t\"'")
+    if t == r:
+        return None
+    return t
 
 
 def split_reference_entries(blocks: list) -> list[dict]:
@@ -252,7 +288,8 @@ def build_references(entries: list[dict], use_llm: bool = True) -> tuple[list[di
                 it = unnum_items[unnum_pos]
                 unnum_pos += 1
         if it is not None:
-            title = str(it.get("title") or "").strip() or raw
+            # title 卫生：剥枚举前缀、截 arXiv 括号段、禁 raw 复读（抽不出 → None）
+            title = _clean_title(it.get("title"), raw)
             authors = _san_authors(it.get("authors"))
             year = _san_year(it.get("year"))
             venue = str(it.get("venue") or "").strip() or None
@@ -262,15 +299,19 @@ def build_references(entries: list[dict], use_llm: bool = True) -> tuple[list[di
             if doi and not _DOI_FULL_RE.match(doi):
                 doi = None
         else:
-            title, authors, venue, doi = raw, [], None, None
+            # 降级规则切分：title 抽不出就置 None，绝不把整条 raw 塞进去
+            title, authors, venue, doi = None, [], None, None
             m = _YEAR_RE.search(raw)
             year = int(m.group(1)) if m else None
         # DOI 确定性正则层：与 LLM 互校，冲突以正则为准（含 LLM 缺失时补齐）
         doi_re = extract_doi(raw)
         if doi_re:
             doi = doi_re
+        # arXiv 编号确定性正则层（LLM 不参与此字段，正则零幻觉直取）
+        arxiv_id = extract_arxiv(raw)
         out.append({"n": e["n"], "raw": raw, "title": title, "authors": authors,
-                    "year": year, "venue": venue, "doi": doi})
+                    "year": year, "venue": venue, "doi": doi,
+                    "arxiv_id": arxiv_id})
     return out, source
 
 
