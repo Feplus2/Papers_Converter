@@ -197,9 +197,13 @@ def _render_body(
             lines.append(text)
 
         elif block.kind == "footnote":
-            # 页脚注：普通段落形态输出（文本零丢失红线，见 content_processor）
+            # 页脚注：编号脚注以 Pandoc 脚注定义形态输出（[^N]: 内容；
+            # 编号在 label 里，内容文本一字不动）。正文引用点因引擎把上标
+            # 标记归一/丢弃而无法字符级定位，按契约保守处理——只产定义段，
+            # 不编造引用点。无编号符号脚注（作者邮箱等）保持原样段落
             text = block.content.replace("\n", " ").strip()
-            lines.append(text)
+            n = getattr(block, "note_num", None)
+            lines.append(f"[^{n}]: {text}" if n is not None else text)
 
         elif block.kind == "image" or block.kind == "table_image":
             anchor = _anchor_line(block)

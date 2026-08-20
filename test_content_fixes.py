@@ -10,8 +10,11 @@ import fitz
 from content_processor import (
     ProcessedBlock,
     _assign_figure_numbers,
+    _extract_caption,
+    _parse_footnote_num,
     _relocate_stray_reference_paragraphs,
     _split_glued_caption,
+    process_content,
 )
 
 
@@ -187,6 +190,99 @@ class TestFigureMergeGuards(unittest.TestCase):
             self.assertEqual(_sniff_coord_space(d), "paddleocr")
         with tempfile.TemporaryDirectory() as td:
             self.assertIsNone(_sniff_coord_space(Path(td)))
+
+
+class TestCaptionPanelReorder(unittest.TestCase):
+    """forecast 事故形态：chart_caption 列表面板标签行在真图注行之前。"""
+
+    def test_panel_labels_after_real_caption(self):
+        block = {"chart_caption": [
+            "(c) For $G \\mu = 1 0 ^ { - 7 }$ and various $p .",
+            "Figure 3: The burst rate $d R / d$ ln h in terms of $f h$ "
+            "for various parameter sets.",
+        ]}
+        cap = _extract_caption(block)
+        self.assertTrue(cap.startswith("Figure 3: The burst rate"))
+        self.assertIn("(c) For", cap)  # 面板标签保留在真图注之后，零丢失
+
+    def test_single_caption_line_untouched(self):
+        # blanco 粘连形态（单个字符串含两个图注标记）不被重排，交下游拆分
+        glued = ("FIG. 5. The mass and momentum spectrum of loops in the "
+                 "radiation era with a long enough description. FIG. 6. "
+                 "The momentum distribution of loops for a slice with "
+                 "constant alpha during the radiation era.")
+        self.assertEqual(_extract_caption({"chart_caption": [glued]}), glued)
+
+    def test_end_to_end_main_caption(self):
+        # 全链路：面板乱序图注 → 主图块 content 以 "Figure N: 真图注" 起首
+        cl = [
+            {"type": "text", "text": "Body text about the forecast results.",
+             "page_idx": 0},
+            {"type": "chart", "page_idx": 0, "img_path": "images/x.jpg",
+             "bbox": [100, 100, 900, 480],
+             "chart_caption": ["(c) $p = 1 0 ^ { - 2 }$",
+                               "Figure 5: The parameter regions excluded by "
+                               "current experiments and constraints."]},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="Forecast test")
+        imgs = [b for b in blocks if b.kind == "image"]
+        self.assertEqual(len(imgs), 1)
+        self.assertTrue(imgs[0].content.startswith(
+            "Figure 5: The parameter regions excluded"), imgs[0].content)
+        self.assertIn("(c)", imgs[0].content)
+
+
+class TestFootnotePandoc(unittest.TestCase):
+    def test_parse_num_forms(self):
+        self.assertEqual(_parse_footnote_num("$^{1}$ For simplicity, we omit"),
+                         (1, "For simplicity, we omit"))
+        self.assertEqual(_parse_footnote_num("6 Note that, the direction"),
+                         (6, "Note that, the direction"))
+        self.assertEqual(_parse_footnote_num("4Note that bursts"), (4, "Note that bursts"))
+        self.assertEqual(_parse_footnote_num("1GWs from kinks may"), (1, "GWs from kinks may"))
+        # 量值/年份不是编号
+        self.assertEqual(_parse_footnote_num("2020 was a good year")[0], None)
+        self.assertEqual(_parse_footnote_num("3.5 sigma deviation")[0], None)
+        self.assertEqual(_parse_footnote_num("\\*skuro@icrr.u-tokyo.ac.jp")[0], None)
+
+    def test_continuation_joined(self):
+        cl = [
+            {"type": "text", "text": "Body paragraph text here.", "page_idx": 5},
+            {"type": "page_footnote", "page_idx": 5,
+             "text": "5 Higher signal to noise ratio may be required, since"},
+            {"type": "page_footnote", "page_idx": 5,
+             "text": "of the amplitude A deviates from the Gaussian shape."},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="Fn test")
+        fns = [b for b in blocks if b.kind == "footnote"]
+        self.assertEqual(len(fns), 1)
+        self.assertEqual(fns[0].note_num, 5)
+        self.assertIn("Gaussian shape", fns[0].content)
+
+    def test_symbol_footnote_plain(self):
+        cl = [
+            {"type": "text", "text": "Body paragraph text here.", "page_idx": 0},
+            {"type": "page_footnote", "page_idx": 0,
+             "text": "\\* Electronic address: sergei@astro.up.pt"},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="Fn test")
+        fns = [b for b in blocks if b.kind == "footnote"]
+        self.assertEqual(len(fns), 1)
+        self.assertIsNone(fns[0].note_num)
+        self.assertIn("Electronic address", fns[0].content)
+
+    def test_render_pandoc_form(self):
+        from renderer import render_paper
+        with tempfile.TemporaryDirectory() as td:
+            blocks = [ProcessedBlock("paragraph", content="Body text."),
+                      ProcessedBlock("footnote", content="Note that, the direction of degeneracy."),
+                      ]
+            blocks[1].note_num = 6
+            md = render_paper(blocks=blocks,
+                              metadata={"title": "T", "author": [{"name": "A"}], "date": "2024"},
+                              output_dir=Path(td), slug="t")
+            text = md.read_text(encoding="utf-8")
+        self.assertIn("[^6]: Note that, the direction of degeneracy.", text)
 
 
 if __name__ == "__main__":

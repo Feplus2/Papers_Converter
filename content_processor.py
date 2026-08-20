@@ -530,6 +530,7 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
     current_page = -1
     in_references = False
     skip_related = False  # 跳过 "You may also like" 推荐列表项
+    last_footnote = None  # 最近一条编号脚注块（跨页断注续行归并用）
 
     for block in blocks:
         page_idx = block.get("page_idx", 0)
@@ -567,11 +568,30 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
 
         # --- 页脚注（作者单位/正文脚注） ---
         # 落成独立 footnote 块：不参与段落合并（页底注释与正文拼读会串文），
-        # 渲染为普通段落（renderer 按段落形态输出），位置保持在阅读流原位
+        # renderer 以 Pandoc 脚注定义形态（[^N]: ...）输出。
+        # 编号形态（引擎归一后的实测形态）："$^{1}$ For ..." / "6 Note that ..." /
+        # "4Note that ..."（数字粘连首词）；符号标记（\* / $^{\dagger}$ 作者
+        # 邮箱脚注）无编号，保持原样输出。
+        # 无编号非符号块判为续行并入最近一条编号脚注——跨页断注续段与编号块
+        # 之间可能隔着整页正文（forecast 实测脚注 5 跨页续段），不按紧邻判定；
+        # 保守闸：续段小写/标点起首，或上条脚注句未完结
         if block_type == "page_footnote":
             if text:
-                result.append(ProcessedBlock("footnote", content=text,
-                                             src_page=page_idx))
+                n, stripped = _parse_footnote_num(text)
+                if n is None and not _FOOTNOTE_SYMBOL_RE.match(text) \
+                        and last_footnote is not None:
+                    prev_t = last_footnote.content.rstrip()
+                    if re.match(r"^[a-z),;.]", text) \
+                            or not re.search(r'[.!?…]["\'\)\]]*\s*$', prev_t):
+                        last_footnote.content = prev_t + " " + text
+                        continue
+                nb = ProcessedBlock("footnote",
+                                    content=stripped if n is not None else text,
+                                    src_page=page_idx)
+                nb.note_num = n
+                result.append(nb)
+                if n is not None:
+                    last_footnote = nb
             continue
 
         # --- 参考文献 ---
@@ -731,6 +751,28 @@ def _is_reference_heading(text: str) -> bool:
     return lower in ("references", "references and notes", "bibliography", "works cited")
 
 
+# 脚注符号标记（作者邮箱等无编号脚注）：\* / † / $^{\dagger}$ 等
+_FOOTNOTE_SYMBOL_RE = re.compile(
+    r"^\s*(?:\\[\*†‡§¶#]|[\*†‡§¶#]|"
+    r"\$\^\{?\\?(?:dagger|ddagger|ast|star|diamond|ast)\"?)", re.I)
+
+
+def _parse_footnote_num(text: str) -> tuple[int | None, str]:
+    """解析脚注编号前缀，返回 (编号, 去编号后的内容)；无编号 → (None, 原文)。
+
+    覆盖引擎归一后的实测形态：$^{1}$/$^{1} 上标式、"6 Note that"（编号+空格）、
+    "4Note that"/"1GWs"（编号粘连首词）。防误切：编号后须接大写字母
+    （"2020 was" / "3.5 σ" 之类量值不是脚注编号）。
+    """
+    m = re.match(r"^\s*\$\^\{?(\d{1,2})\}?\$?\s*(?=\S)", text)
+    if m:
+        return int(m.group(1)), text[m.end():].strip()
+    m = re.match(r"^(\d{1,2})\s*(?=[A-Z])", text)
+    if m:
+        return int(m.group(1)), text[m.end():].strip()
+    return None, text
+
+
 def _extract_caption(block: dict) -> str:
     """从图片/图表块提取 caption"""
     # 优先 chart_caption，再 image_caption
@@ -747,7 +789,22 @@ def _extract_caption(block: dict) -> str:
             continue
         parts.append(cap)
 
+    # 面板标签乱序在真图注之前（forecast 实测：chart_caption 列表把
+    # "(c) p=..." 面板标签行排在 "Figure 5: ..." 真图注行之前，乱序拼接会让
+    # 图注首词判定（prose_like 降为正文/组界识别）全错）：恰一行以图编号
+    # 起首且不在首位 → 提到最前，面板标签保留在真图注之后（文本零丢失）
+    if len(parts) > 1:
+        marked = [k for k, p in enumerate(parts) if _FIG_CAP_START_RE.match(p)]
+        if len(marked) == 1 and marked[0] != 0:
+            k = marked[0]
+            parts = [parts[k]] + parts[:k] + parts[k + 1:]
     return " ".join(parts)
+
+
+# 图注行起首形态（"Figure 3: " / "FIG. 5. " / "Fig. 12.4: "；面板字母
+# "Fig. 3a" 与句中引用 "Fig. 7)." 因编号后不跟 ". "/": " 而不命中）
+_FIG_CAP_START_RE = re.compile(
+    r"^(?:Fig(?:ure)?\.?|FIG\.?)\s*\d+(?:\.\d+)*\s*[\.\:]\s", re.I)
 
 
 def _extract_table_caption(block: dict) -> str:
@@ -1489,8 +1546,9 @@ def _assign_figure_numbers(blocks: list[ProcessedBlock]) -> None:
         if main is not None:
             ext = Path(main.img_src).suffix if main.img_src else ".png"
             main.img_new_name = _unique(f"{fig_stem(num)}{ext}")
-            # 图注格式："Figure N: caption"（去掉 caption 里重复的 "Fig. N" 前缀，N 可带小数）
-            cap = re.sub(r"^Fig(?:ure|\.)?\s*\d+(?:\.\d+)*\.?\s*", "", main.caption or "").strip()
+            # 图注格式："Figure N: caption"（去掉 caption 里重复的 "Fig. N"/
+            # "Figure N:" 前缀，N 可带小数；分隔符冒号句号都剥，防 "Figure N: : ..."）
+            cap = re.sub(r"^Fig(?:ure|\.)?\s*\d+(?:\.\d+)*\s*[\.\:]?\s*", "", main.caption or "").strip()
             main.content = f"Figure {num}: {cap}" if cap else f"Figure {num}"
 
     # --- 游离编号图注绑回（Blood/PNAS 式 "Figure N." 正文块 → 最近的未编号图组）---
