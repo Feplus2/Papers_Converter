@@ -490,6 +490,103 @@ class TestFootnotePreserved(unittest.TestCase):
         pdf.unlink()
 
 
+class TestFootnoteLinks(unittest.TestCase):
+    """P1 脚注链接追回：footnote/frontmatter 类 dest → 引用点 [^N] 注入。"""
+
+    def _run(self, page0_text, link_specs, blocks):
+        """link_specs: [(源文字, dest_name)]；dest_page=-1 → covering 无坐标。"""
+        doc = fitz.open()
+        doc.new_page().insert_text((72, 100), page0_text, fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        links = []
+        for txt, dest in link_specs:
+            c0 = pages[0].raw.find(txt)
+            self.assertGreaterEqual(c0, 0, f"{txt!r} 不在页文本里")
+            links.append(le._Link(0, c0, c0 + len(txt), txt, dest_name=dest))
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        return res
+
+    def _fn_block(self, num, text="Note that, the direction of degeneracy."):
+        b = ProcessedBlock("footnote", content=text, src_page=0)
+        b.note_num = num
+        return b
+
+    def test_numbered_footnote_ref_injected(self):
+        # 全链路：Hfootnote.7（计数器 ≠ 印刷编号）可见标记 '6' → 目标脚注块
+        # note_num=6 → 正文标记替换为 [^6]（编号两端同号）
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "As shown before6 in the text.", fontsize=11)
+        page.insert_text((72, 700), "6 Note that, the direction of degeneracy.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("before") + len("before")
+        links = [le._Link(0, c0, c0 + 1, "6", dest_name="Hfootnote.7",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock("paragraph",
+                                 content="As shown before6 in the text.", src_page=0),
+                  self._fn_block(6)]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content, "As shown before[^6] in the text.")
+        self.assertEqual(res.stats.get("fn"), [1, 0])
+
+    def test_target_not_footnote_dropped(self):
+        # 目标落在普通段落而非 footnote 块 → 放弃
+        blocks = [ProcessedBlock("paragraph",
+                                 content="...as shown before6 in the text.",
+                                 src_page=0)]
+        res = self._run("...as shown before6 in the text.",
+                        [("6", "Hfootnote.2")], blocks)
+        self.assertEqual(blocks[0].content, "...as shown before6 in the text.")
+        self.assertEqual(res.stats.get("fn"), [0, 1])
+
+    def test_number_mismatch_dropped(self):
+        # 源标记 5 但目标脚注块编号 6 → 编号对不上 → 放弃
+        blocks = [ProcessedBlock("paragraph", content="text5 marker.", src_page=0),
+                  self._fn_block(6)]
+        res = self._run("text5 marker.", [("5", "Hfootnote.6")], blocks)
+        self.assertEqual(blocks[0].content, "text5 marker.")
+        self.assertEqual(res.stats.get("fn"), [0, 1])
+
+    def test_fn_symbol_map(self):
+        b = ProcessedBlock("footnote", content="\\* Electronic address: a@b.c")
+        self.assertEqual(le._footnote_symbol_of(b), "*")
+        b2 = ProcessedBlock("footnote", content="$^{\\dagger}$ Electronic address: a@b.c")
+        self.assertEqual(le._footnote_symbol_of(b2), "†")
+        b3 = ProcessedBlock("footnote", content="Note that something.")
+        self.assertIsNone(le._footnote_symbol_of(b3))
+
+    def test_fn_dest_recognition(self):
+        for d in ("Hfootnote.2", "footnote.3", "equation.3-footnote.1",
+                  "section*.6-footnote.3", "frontmatter.1", "MAC11592FN2", "fn1"):
+            self.assertTrue(le._FN_DEST_RE.search(d), d)
+        for d in ("cite.x", "figure.3", "bib0001", "aff0001", "cor0001", ""):
+            self.assertFalse(le._FN_DEST_RE.search(d or "x"), d)
+
+
 class TestCitationClusters(unittest.TestCase):
     """引文簇/区间部分矩形合并（monkeypatch 提取层注入合成的 cite.* 链接）。"""
 

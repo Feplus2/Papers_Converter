@@ -200,10 +200,17 @@ def _render_body(
             # 页脚注：编号脚注以 Pandoc 脚注定义形态输出（[^N]: 内容；
             # 编号在 label 里，内容文本一字不动）。正文引用点因引擎把上标
             # 标记归一/丢弃而无法字符级定位，按契约保守处理——只产定义段，
-            # 不编造引用点。无编号符号脚注（作者邮箱等）保持原样段落
+            # 不编造引用点。符号脚注（作者邮箱等）保持原样段落；若链接注入
+            # 阶段为它成功定标了引用点（note_label），定义段带同号 label
             text = block.content.replace("\n", " ").strip()
             n = getattr(block, "note_num", None)
-            lines.append(f"[^{n}]: {text}" if n is not None else text)
+            label = getattr(block, "note_label", None)
+            if label:
+                lines.append(f"[^{label}]: {text}")
+            elif n is not None:
+                lines.append(f"[^{n}]: {text}")
+            else:
+                lines.append(text)
 
         elif block.kind == "image" or block.kind == "table_image":
             anchor = _anchor_line(block)

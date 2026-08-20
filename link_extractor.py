@@ -140,16 +140,20 @@ def _skeletonize(text: str) -> tuple[str, list[int]]:
     s2o: list[int] = []
     prev_ws = True  # 前导空白直接丢弃；词间空白折叠为单个空格
     pending = False
+    pend_from = 0  # 待补空格的原文下标（空白字符自身，非其后首个非空白字符——
+    # 误记为后者会让 r2s 把该字符映射到空格拉槽，区间起点偏一，cosmic 实测）
     for i, ch in enumerate(text):
         # NFKC 不抹平弯引号/连接号，显式归一（引擎与 PDF 字符流常因此错位）
         ch = ch.translate(_CHAR_FOLD)
         for c in unicodedata.normalize("NFKC", ch).casefold():
             if c.isspace():
+                if not pending:
+                    pend_from = i
                 pending = True
                 continue
             if pending and not prev_ws:
                 sk.append(" ")
-                s2o.append(i)
+                s2o.append(pend_from)
             sk.append(c)
             s2o.append(i)
             prev_ws = False
@@ -236,6 +240,31 @@ _PUB_DEST_CAT = {
 }
 
 
+# 脚注类 named dest：hyperref footnote.N/Hfootnote.N、equation.N-footnote.M、
+# frontmatter.N、出版社 fn1（Elsevier MAC…FN1 等）。aff/cor 机构/通讯作者
+# 标记语义太宽（字母标记难以无歧义校验），不匹配此式、维持放弃
+_FN_DEST_RE = re.compile(r"(?:h?footnote|frontmatter|fn)\.?\d+$", re.I)
+# 符号脚注标记归一（∗/*/ast、dagger 等各写归一到单字符键）
+_FN_SYM_MAP = {
+    "*": "*", "∗": "*", "†": "†", "‡": "‡", "§": "§", "¶": "¶",
+}
+
+
+def _footnote_symbol_of(block) -> str | None:
+    """footnote 块内容的首标记符号（归一键）；无符号标记 → None。"""
+    t = (block.content or "").lstrip()
+    m = re.match(r"^(?:\\?([\*†‡§¶])|\$\^\{?\\?(?:dagger|ddagger|ast|star)\b)",
+                 t)
+    if not m:
+        return None
+    if m.group(1):
+        return _FN_SYM_MAP.get(m.group(1))
+    tok = m.group(0)
+    if "dagger" in tok:
+        return "‡" if "ddagger" in tok else "†"
+    return "*"  # ast/star
+
+
 def _brackets_balanced(text: str) -> bool:
     """方括号是否平衡（Markdown 链接显示文字的要求；深度不为负且归零）。"""
     depth = 0
@@ -293,6 +322,7 @@ class _Link:
     dest_y: float = 0.0
     dest_name: str = ""     # nameddest（cite.* / figure.N / section* / ...）
     cluster: int = -1       # 引文簇组号（≥0 时为簇部分矩形，须整组同块注入）
+    fn_target: int = -1     # 脚注链接的目标 footnote 块下标（label 延迟落块用）
 
 
 @dataclass
@@ -481,6 +511,12 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
                     to = lk.get("to")
                     if to is not None:
                         dest_x, dest_y = to.x, to.y
+                        if kind == fitz.LINK_NAMED \
+                                and 0 <= dest_page < doc.page_count:
+                            # named dest 的 to 是 PDF 用户空间（左下原点）y 坐标
+                            # （MuPDF 不做翻转——cosmic A4 与 forecast Letter 实测；
+                            # LINK_GOTO 的 to 已是 fitz 顶左坐标，不在此列）
+                            dest_y = doc[dest_page].rect.height - dest_y
                     if kind == fitz.LINK_NAMED and dest_name \
                             and (dest_page < 0 or to is None):
                         # 页码或坐标缺失 → resolve_names() 补（书签式 dest 的
@@ -491,8 +527,11 @@ def extract_pdf_links(pdf_path) -> tuple[list, list] | None:
                                 dest_page = nm.get("page", -1)
                             if to is None:
                                 to2 = nm.get("to")
-                                if to2 is not None:
-                                    dest_x, dest_y = to2.x, to2.y
+                                if to2 is not None and 0 <= dest_page < doc.page_count:
+                                    # resolve_names 的 to 同样是左下原点 y
+                                    dest_x = to2[0] if not hasattr(to2, "x") else to2.x
+                                    raw_y = to2[1] if not hasattr(to2, "y") else to2.y
+                                    dest_y = doc[dest_page].rect.height - raw_y
                                 elif 0 <= dest_page < doc.page_count:
                                     pt = _parse_dest_string(
                                         nm.get("dest") or "",
@@ -627,11 +666,13 @@ class _Aligner:
             return None
         return _BlockMap(idx, p0, frame, off1, segs, bskel, b2o)
 
-    def map_span(self, bm: _BlockMap, link: "_Link") -> tuple[int, int] | None:
+    def map_span(self, bm: _BlockMap, link: "_Link",
+                 strict: bool = True) -> tuple[int, int] | None:
         """链接源字符区间 → 块原文偏移 [o0, o1)。不在同一等值段内 → None。
 
-        置信度：等值段须比区间长出上下文（≥4 字符），或触及块首/尾
-        （孤立的 3 字符巧合匹配不足为凭）。
+        strict 置信度：等值段须比区间长出上下文（≥4 字符），或触及块首/尾
+        （孤立的 3 字符巧合匹配不足为凭）。strict=False 仅供脚注上标标记的
+        $^{N}$ 归一形态特判（后续还有段内文字逐字校验兜底）。
         """
         page = self.pages[link.page]
         s0 = _raw_to_skel(page, link.c0, forward=True)
@@ -651,7 +692,7 @@ class _Aligner:
                 o1 = bm.b2o[b_ + (f1 - 1 - a)] + 1
                 context = sz - (f1 - f0)
                 touches_edge = (b_ == 0) or (b_ + sz == len(bm.bskel))
-                if context < 4 and not touches_edge:
+                if strict and context < 4 and not touches_edge:
                     return None  # 孤立巧合匹配，置信度不足
                 return o0, o1
         return None
@@ -784,8 +825,28 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             if len(cands) == 1:
                 return f"#ref-{num}", "ref"
             return None, "ref"
-        if dest.startswith(("frontmatter", "footnote")) or "-footnote" in dest:
-            return None, "other"  # 无对应锚点契约
+        if _FN_DEST_RE.search(dest):
+            # 脚注链接：目标映射须落 footnote 块。编号脚注：编号取自目标块
+            # 解析出的 note_num（Hfootnote.N 等 dest 是内部计数器，与印刷
+            # 编号可能错一——forecast 实测 Hfootnote.2 的可见标记是 '1'），
+            # 源标记数字与 note_num 必须一致。符号脚注（∗/† 作者邮箱类）：
+            # 源符号与脚注块首标记同符才链（label 用源可见字符）。
+            idx = _target_block(lk)
+            if idx is None or blocks[idx].kind != "footnote":
+                return None, "fn"
+            fb = blocks[idx]
+            n = getattr(fb, "note_num", None)
+            dm = re.search(r"\d+", text)
+            if n is not None:
+                if dm is None or int(dm.group(0)) != n:
+                    return None, "fn"  # 编号对不上 → 放弃
+                return f"fn:{n}", "fn"
+            sym = text.strip(".,;:· ")
+            if n is None and len(sym) == 1 and sym in _FN_SYM_MAP \
+                    and _footnote_symbol_of(fb) == _FN_SYM_MAP[sym]:
+                lk.fn_target = idx  # label 延迟到注入真正写入时落块（防孤儿）
+                return f"fn:{sym}", "fn"
+            return None, "fn"
         if dest.startswith("equation"):
             # equation.N 的 N 是 hyperref 内部计数器而非印刷 \tag 编号
             # （实测 equation.4 的可见文字是 (5)），编号取自源文字，
@@ -927,6 +988,7 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                 continue
         # 源区间 → 所属块 + 块内偏移（字符级对齐 + 区间守卫 + 数学段跳过）
         placed: tuple[int, int, int] | None = None
+        math_hit: tuple[int, int, int] | None = None  # 位置已明但落在数学段内
         for idx, b in enumerate(blocks):
             if b.kind not in _INJECTABLE_KINDS:
                 continue
@@ -937,6 +999,21 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                 continue
             offsets = aligner.map_span(bm, lk)
             if offsets is None:
+                # 严格对齐失败：宽松档仅供脚注上标标记（$^{N}$ 数学段归一
+                # 形态）特判——区间守卫照过，且必须落在数学段内
+                loose = aligner.map_span(bm, lk, strict=False)
+                if loose is not None:
+                    o0, o1 = loose
+                    if _skeletonize(b.content[o0:o1])[0] == _skeletonize(
+                            pages[lk.page].raw[lk.c0:lk.c1])[0]:
+                        spans = math_spans.get(idx)
+                        if spans is None:
+                            spans = [(m.start(), m.end())
+                                     for m in _MATH_SPAN_RE.finditer(b.content)]
+                            math_spans[idx] = spans
+                        if any(o0 >= s and o1 <= e for s, e in spans):
+                            math_hit = (idx, o0, o1)
+                            break
                 continue
             o0, o1 = offsets
             # 区间守卫：块内子串骨架须与链接源文字一致（防错位注入）
@@ -945,18 +1022,52 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                 pages[lk.page].raw[lk.c0:lk.c1])[0]
             if sub_sk != want_sk:
                 continue
-            # 数学段内不注入
+            # 数学段内不注入（脚注标记的 $^{N}$ 归一形态在解析后特判）
             spans = math_spans.get(idx)
             if spans is None:
                 spans = [(m.start(), m.end())
                          for m in _MATH_SPAN_RE.finditer(b.content)]
                 math_spans[idx] = spans
             if any(o0 < e and o1 > s for s, e in spans):
-                break  # 命中数学段：位置已明但规则禁止注入，按放弃计
+                math_hit = (idx, o0, o1)
+                break
             placed = (idx, o0, o1)
             break
         # 目标映射 + 校验（URI 白名单兜底要看落在哪种块里）
         target, cat = _resolve(lk, blocks[placed[0]].kind if placed else None)
+        fn_whole_math = False
+        if placed is None and math_hit is not None and target is not None \
+                and target.startswith("fn:"):
+            # 脚注标记被引擎归一为 $^{N}$ 数学段：整段替换为 [^N]
+            # （上标渲染形态等价；段内文字与 label 逐字一致才动，零丢失）
+            label = target[3:]
+            bidx, o0, o1 = math_hit
+            content = blocks[bidx].content
+            for m in _MATH_SPAN_RE.finditer(content):
+                if m.start() <= o0 and o1 <= m.end():
+                    inner = re.fullmatch(r"\$\^\{?([^\s{}$]+)\}?\$", m.group(0))
+                    if inner and inner.group(1) == label:
+                        placed = (bidx, m.start(), m.end())
+                        fn_whole_math = True
+                    break
+        if target is not None and placed is not None and target.startswith("fn:") \
+                and not fn_whole_math:
+            # 脚注引用点：标记字符移入 label（替换式注入）。区间收缩到数字段
+            # （编号脚注，矩形常把句读一并覆盖）或要求恰为符号字符；
+            # 收缩后块内子串 == label，剥除 label 即还原（零丢失）
+            bidx, o0, o1 = placed
+            sub = blocks[bidx].content[o0:o1]
+            label = target[3:]
+            if label.isdigit():
+                dm = re.search(r"\d+", sub)
+                if dm is None or dm.group(0) != label:
+                    target = None
+                else:
+                    o0 += dm.start()
+                    o1 = o0 + len(dm.group(0))
+                    placed = (bidx, o0, o1)
+            elif sub != label:
+                target = None  # 符号标记无法字符级对齐 → 放弃（定义保持原样）
         if placed is None and target is not None and cat == "ref" \
                 and (lk.dest_name.startswith("cite.")
                      or bool(_PUB_DEST_RE.search(lk.dest_name or ""))):
@@ -971,8 +1082,10 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             cluster_pending.setdefault(lk.cluster, []).append((placed, target, cat))
             continue
         if target is not None and placed is not None:
-            injections.setdefault(placed[0], []).append(
-                (placed[1], placed[2], target, cat))
+            inj = [placed[1], placed[2], target, cat]
+            if target.startswith("fn:") and lk.fn_target >= 0:
+                inj.append(lk.fn_target)  # 符号脚注 label 在应用阶段落块
+            injections.setdefault(placed[0], []).append(inj)
             _stat(cat, True)
         else:
             _stat(cat, False)
@@ -991,18 +1104,22 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
     # 应用注入：同块多区间按偏移倒序逐个拼接，互不干扰。
     # 先就地合并同目标的相邻区间（跨行链接常被拆成多个矩形，如
     # "arXiv:xxx [astro-" + "ph.CO]"，合并后显示文字方括号恢复平衡）；
-    # 合并后仍不平衡的放弃（不平衡括号会破坏 Markdown 链接语法与 A/B 剥离）
+    # 合并后仍不平衡的放弃（不平衡括号会破坏 Markdown 链接语法与 A/B 剥离）。
+    # fn: 目标是脚注引用点——标记字符替换为 [^label]（不包链接语法）
     for idx, spans in injections.items():
         b = blocks[idx]
         merged: list[list] = []
-        for o0, o1, target, cat in sorted(spans):
-            if merged and merged[-1][2] == target and merged[-1][1] == o0:
+        for inj in sorted(spans):
+            o0, o1, target = inj[0], inj[1], inj[2]
+            if merged and merged[-1][2] == target and merged[-1][1] == o0 \
+                    and not target.startswith("fn:"):
                 merged[-1][1] = o1  # 紧邻同目标：延伸前一区间
             else:
-                merged.append([o0, o1, target, cat])
+                merged.append(inj)
         content = b.content
         last_start = len(content) + 1
-        for o0, o1, target, cat in reversed(merged):
+        for inj in reversed(merged):
+            o0, o1, target, cat = inj[0], inj[1], inj[2], inj[3]
             if o1 > last_start or not _brackets_balanced(content[o0:o1]):
                 # 区间重叠（异常矩形）或括号不平衡：保守放弃，修正统计
                 result.injected -= 1
@@ -1012,7 +1129,13 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                     slot[0] -= 1
                     slot[1] += 1
                 continue
-            content = content[:o0] + "[" + content[o0:o1] + "](" + target + ")" + content[o1:]
+            if target.startswith("fn:"):
+                content = content[:o0] + "[^" + target[3:] + "]" + content[o1:]
+                if len(inj) > 4 and not target[3:].isdigit():
+                    # 符号脚注：引用点真正写入才把定义段标成同号 label（防孤儿）
+                    blocks[inj[4]].note_label = target[3:]
+            else:
+                content = content[:o0] + "[" + content[o0:o1] + "](" + target + ")" + content[o1:]
             last_start = o0
             if target.startswith("#"):
                 result.anchors.add(target[1:])
