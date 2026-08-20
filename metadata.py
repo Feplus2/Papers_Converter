@@ -42,7 +42,8 @@ def extract_metadata(content_list: list[dict], use_llm: bool = True,
         doi=(zotero_meta or {}).get("doi", "") or "",
     )
 
-    # 收集前几页的文本块（跳过噪声类型和封面页）
+    # 收集前几页的文本块（跳过噪声类型和封面页；剔除下载水印行——
+    # "Downloaded by/on ..." 的年份是下载日期，绝不参与元数据）
     noise_types = {"header", "footer", "page_number", "aside_text"}
     early_blocks = []
     for block in content_list:
@@ -52,7 +53,7 @@ def extract_metadata(content_list: list[dict], use_llm: bool = True,
             continue
         if block["type"] in noise_types:
             continue
-        text = _normalize_inline(block.get("text", "").strip())
+        text = _strip_download_watermark(_normalize_inline(block.get("text", "").strip()))
         if text:
             early_blocks.append({**block, "text": text})
 
@@ -91,6 +92,26 @@ def extract_metadata(content_list: list[dict], use_llm: bool = True,
     
     # 语言检测（含 CJK 字符判为中文）
     meta["lang"] = _detect_lang(meta, early_blocks)
+
+    # 出版年确定性裁决（最终定夺处）：©/引用行/Published > Accepted > Received；
+    # 下载水印年永不采用（文本已过滤）；LLM/规则给的年份以此校验纠正
+    from datetime import date as _date_cls
+    _max_y = _date_cls.today().year + 1
+    year_texts = [b.get("text", "") for b in early_blocks]
+    year_texts += [_strip_download_watermark(b.get("text", ""))
+                   for b in content_list[:60]]
+    pick, pick_src = _pick_pub_year(year_texts, _max_y)
+    cur_year = re.search(r"(?:19|20)\d{2}", str(meta.get("date") or ""))
+    cur_year = cur_year.group(0) if cur_year else ""
+    if zotero_meta and zotero_meta.get("date"):
+        pass  # Zotero 权威元数据的 date 不参与裁决
+    elif pick and cur_year != pick:
+        if cur_year:
+            logger.info(f"  年份裁决: {cur_year} → {pick}（{pick_src} 优先）")
+        meta["date"] = pick
+    elif not pick and cur_year and not _plausible_year(cur_year, _max_y):
+        logger.warning(f"  年份 {cur_year} 超出合理窗（1900-{_max_y}），弃用")
+        meta["date"] = ""
 
     # 清洗标题（去掉首尾脚注/通讯标记如 \*\* * †）
     if meta.get("title"):
@@ -463,6 +484,84 @@ def _parse_author_line(text: str) -> list[dict]:
     return authors
 
 
+# ============================================================
+# 元数据加固：下载水印剔除 + 年份优先级（wang2024routes 实测：
+# 首页三个年份 Received 2023 / 引用行 2024 / Downloaded 水印 2025，
+# LLM 在候选间掷骰子导致 slug 年份漂移）
+# ============================================================
+
+# 行级下载水印（只剔行，不动块内其余文本；RSC 式 "Published on X. Downloaded
+# by Y on Z." 只剔 Downloaded 段，保住 Published 年）
+_WM_LINE_RES = [
+    re.compile(r"^\s*Downloaded\s+(?:by|from|on)\b", re.I),   # 整行下载戳
+    re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b.*(?:download|proxy|librar|via)", re.I),  # IP+代理语境
+    re.compile(r"(?:download|proxy|librar).*\b\d{1,3}(?:\.\d{1,3}){3}\b", re.I),
+    re.compile(r"^\s*via\s+\S.*(?:library|proxy|campus|vpn)\b", re.I),  # 机构代理行
+]
+_WM_SEGMENT_RE = re.compile(r"\s*Downloaded\s+(?:by|from|on)\b.*$", re.I)
+
+
+def _strip_download_watermark(text: str) -> str:
+    """逐行剔除出版商下载戳；行内嵌的 Downloaded 段只剔段（保住 Published 前缀）。"""
+    out = []
+    for ln in (text or "").splitlines():
+        if any(p.search(ln) for p in _WM_LINE_RES):
+            continue
+        ln = _WM_SEGMENT_RE.sub("", ln)
+        if ln.strip():
+            out.append(ln)
+    return "\n".join(out)
+
+
+def _plausible_year(y: str, max_year: int) -> bool:
+    try:
+        return 1900 <= int(y) <= max_year
+    except (TypeError, ValueError):
+        return False
+
+
+def _pick_pub_year(texts: list[str], max_year: int) -> tuple[str | None, str]:
+    """出版年确定性裁决（texts 已过水印过滤）。
+    优先级：©行/期刊引用行/Published 年 > Accepted 年 > Received 年 > None。
+    返回 (年份, 来源标签)；候选超窗（<1900 或 >今年+1）判伪降级到次候选。
+    """
+    joined = "\n".join(t for t in texts if t)
+
+    def _first(patterns) -> str | None:
+        for pat in patterns:
+            for m in re.finditer(pat, joined, re.I | re.M):
+                if _plausible_year(m.group(1), max_year):
+                    return m.group(1)
+        return None
+
+    # P1a: 期刊引用行年（卷目页形态是书目权威年份——"Mater. Chem. Phys. 101
+    # (2007) 372" 的 2007 是正年，© 2006 只是上线版权年，ernst 实测）：
+    # "Chem. Soc. Rev., 2024, 53" / "Physics 101 (2007) 372" / 条目尾 (2024).
+    y = _first([r"\d+\s*\(((?:19|20)\d{2})\)\s*\d",
+                r"(?:^|\n)\s*[^\n]{0,80}?,\s*((?:19|20)\d{2})\s*,\s*\d",
+                r"\(((?:19|20)\d{2})\)\s*[.;,]?\s*$"])
+    if y:
+        return y, "引用行"
+    # P1b: © 年
+    y = _first([r"©\s*(?:\D{0,20})?((?:19|20)\d{2})",
+                r"\(c\)\s*(?:\D{0,20})?((?:19|20)\d{2})"])
+    if y:
+        return y, "©"
+    # P1c: Published(on) 年
+    y = _first([r"Published\s+(?:on\s+(?:\d{1,2}\s+\w+\s+)?|in\s+)?:?\s*((?:19|20)\d{2})"])
+    if y:
+        return y, "published"
+    # P2: Accepted 年
+    y = _first([r"Accepted\s+(?:\d{1,2}\w{0,2}\s+\w+\s+)?((?:19|20)\d{2})"])
+    if y:
+        return y, "accepted"
+    # P3: Received 年
+    y = _first([r"Received\s+(?:\d{1,2}\w{0,2}\s+\w+\s+)?((?:19|20)\d{2})"])
+    if y:
+        return y, "received"
+    return None, ""
+
+
 def _loads_lenient(content: str):
     r"""宽容解析 JSON：修复 LLM 输出中常见的非法转义（如 \~ \- ）。"""
     try:
@@ -498,7 +597,9 @@ def _llm_extract(early_blocks: list[dict]) -> dict:
 需要提取的字段：
 - title: 论文主标题。注意区分：不含副标题/dek（标题下方补充说明的一句话），不含栏目名（如 "LITHIUM BATTERIES"/"Review"/"INSIGHTS | PERSPECTIVES"/"Article"）
 - authors: 作者数组，每项 {"name": "名 姓"}。作者可能以多种形式出现："By X and Y"、"X, Y, Z"、带上标编号 "X $^{1}$, Y $^{2}$"。请去掉 "By" 前缀、上标、机构名，只留人名
-- date: 发表年份（4 位数字字符串）
+- date: 发表年份（4 位数字字符串）。取期刊引用行/©行/Published 行的出版年；
+  Received/Accepted 是投稿时间线不是出版年（仅在无出版年时才用 Accepted/Received 年）；
+  "Downloaded by/on ..." 是下载水印，其中的年份是下载日期，绝不采用
 - abstract: 摘要全文（完整，勿截断）。若有 "Abstract"/"摘要" 标记取其内容；若无明确标记，取标题与作者之后的第一个完整论述段落（Science/Nature 等常无 Abstract 标记）
 - doi: DOI（如 "10.1126/science.abc5454"）
 - container-title: 期刊/会议名（如 "Science"/"Nature"）
