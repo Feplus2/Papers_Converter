@@ -516,6 +516,55 @@ def _find_swallowed_marker(lk: "_Link", label: str, blocks: list,
     return None
 
 
+# 上标引文被引擎吞进数学段的两种形态（RSC 裸上标数字引文，guo2017 实测）：
+# 整段形态 "$^{19, 20}$" / "$^{3-10}$"（花括号可选、兼容收尾空格），
+# 尾吞形态 "$SIBs^{19, 20}$" / "$MgO^{34}$"（引文簇作为 ^{...} 尾巴接在
+# 被一并数学化的词后）。数字簇字符集：数字 + 逗号/分号/连字符/短横线/空白。
+# 无 ^ 包裹的裸数字附录形态（"$f^{-4/3}2$"）不在此列——沿用脚注版
+# _split_math_core 逐号剥离判据
+_CIT_SUP_WHOLE_RE = re.compile(r"^\^\{?(\d[\d,;\s–—-]*?)\}?\s*$")
+_CIT_SUP_TAIL_RE = re.compile(r"^(.*?)\^\{?(\d[\d,;\s–—-]*?)\}?\s*$", re.S)
+
+
+def _cit_sup_replacement(span: str, pend: list) -> str | None:
+    """上标引文数学段的整段替换文本（证据驱动、全有或全无）。
+
+    pend: 落入该段且已解析出目标的引文链接 [(编号, 目标)]（目标由 PDF 原生
+    dest 确定，非编造）。段芯须为整段或尾吞形态；簇的数字令牌与 pend 编号
+    须一一对应（簇里缺一个号的链接就整段放弃，绝不拆一半）。返回
+    "[[19](#ref-19), [20](#ref-20)]"（整段）或 "$SIBs$[[19](#ref-19), …]"
+    （尾吞，余部保持数学段原样）；任一条件不满足 → None（维持原数学段）。
+    """
+    core = span[1:-1]
+    rest = None
+    m = _CIT_SUP_WHOLE_RE.match(core)
+    if m is not None:
+        cluster = m.group(1)
+    else:
+        m = _CIT_SUP_TAIL_RE.match(core)
+        if m is None:
+            return None
+        rest, cluster = m.group(1), m.group(2)
+        # 余部形态合法才拆：非空、以字母或 )/]/} 收尾（防把 x2^3 的 3 当引文、
+        # 防余部残破算符），花括号仍平衡
+        if not rest or not (rest[-1].isalpha() or rest[-1] in "})]"):
+            return None
+        bare = rest.replace("\\{", "").replace("\\}", "")
+        if bare.count("{") != bare.count("}"):
+            return None
+    tokens = re.findall(r"\d+", cluster)
+    targets = {num: t for num, t in pend}
+    if not tokens or len(tokens) != len(pend) or len(set(tokens)) != len(tokens):
+        return None
+    if any(tok not in targets for tok in tokens):
+        return None
+    linked = re.sub(r"\d+",
+                    lambda mm: f"[{mm.group(0)}]({targets[mm.group(0)]})",
+                    cluster)
+    out = f"[{linked}]"
+    return f"${rest}$" + out if rest is not None else out
+
+
 def _place_unique_citation(lk: _Link, num: str, blocks: list,
                            math_spans: dict):
     """上标引文兜底落位：源页候选块内 "[num]" 恰好唯一出现 → (块下标, o0, o1)；
@@ -873,6 +922,7 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
     injections: dict[int, list[tuple[int, int, str, str]]] = {}
     math_spans: dict[int, list[tuple[int, int]]] = {}
     cluster_pending: dict[int, list[tuple[tuple | None, str | None, str]]] = {}
+    ref_math_pending: dict[tuple, list] = {}  # (块下标, 段起, 段止) -> [(编号, 目标)]
     result = LinkResult()
 
     def _stat(cat: str, ok: bool):
@@ -1141,6 +1191,8 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
         target, cat = _resolve(lk, blocks[placed[0]].kind if placed else None)
         fn_whole_math = False
         fn_replacement = None
+        ref_replacement = None      # 引文数学段追回的自定义替换文本
+        ref_math_deferred = False   # 引文落入数学段，已挂段级待决
         if placed is None and math_hit is not None and target is not None \
                 and target.startswith("fn:"):
             # 脚注标记被引擎归一为 $^{N}$ 数学段：整段替换为 [^N]
@@ -1204,6 +1256,45 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             # 唯一出现位置落位；多义（同页多处 [N]）维持放弃
             num = target.split("-", 1)[1]
             placed = _place_unique_citation(lk, num, blocks, math_spans)
+            if placed is None and lk.cluster < 0:
+                if math_hit is not None:
+                    # 上标引文被吞进数学段（guo2017 实测：$^{19, 20}$ 整段、
+                    # $SIBs^{19, 20}$ 尾吞形态）。挂入段级待决，主循环后同段
+                    # 链接整组判定（与簇同哲学：全有或全无，缺一维持原数学段）
+                    bidx, o0, o1 = math_hit
+                    spans = math_spans.get(bidx)
+                    if spans is None:
+                        spans = [(m.start(), m.end())
+                                 for m in _MATH_SPAN_RE.finditer(
+                                     blocks[bidx].content or "")]
+                        math_spans[bidx] = spans
+                    for s, e in spans:
+                        if not (s <= o0 and o1 <= e):
+                            continue
+                        core = blocks[bidx].content[s:e][1:-1]
+                        if _CIT_SUP_WHOLE_RE.match(core) is not None \
+                                or _CIT_SUP_TAIL_RE.match(core) is not None:
+                            ref_math_pending.setdefault((bidx, s, e), []).append(
+                                (num, target))
+                            ref_math_deferred = True
+                        else:
+                            # 裸数字附录形态（$f^{-4/3}2$）：脚注版同款判据剥离
+                            rest = _split_math_core(core, num)
+                            if rest is not None:
+                                placed = (bidx, s, e)
+                                ref_replacement = f"${rest}$[[{num}]]({target})"
+                        break
+                else:
+                    # 对齐完全失败的引文版落点找回（同 _find_swallowed_marker
+                    # 双证据：对齐文本终点紧邻标记 + 段芯以编号收尾）
+                    hit = _find_swallowed_marker(lk, num, blocks, aligner)
+                    if hit is not None:
+                        bidx, m_start, m_end, rest = hit
+                        placed = (bidx, m_start, m_end)
+                        ref_replacement = f"${rest}$[[{num}]]({target})"
+        if ref_math_deferred:
+            # 引文落入数学段待决：计数随主循环后的段级整组提交判定
+            continue
         if lk.cluster >= 0:
             # 簇部分矩形：暂缓提交，主循环后整组判定（全解析成功且落同一块）
             cluster_pending.setdefault(lk.cluster, []).append((placed, target, cat))
@@ -1213,11 +1304,26 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             # （编号脚注不走符号 label 落块；replacement 仅证据驱动剥离用）
             inj = [placed[1], placed[2], target, cat,
                    lk.fn_target if target.startswith("fn:") else -1,
-                   fn_replacement]
+                   fn_replacement if fn_replacement is not None else ref_replacement]
             injections.setdefault(placed[0], []).append(inj)
             _stat(cat, True)
         else:
             _stat(cat, False)
+
+    # 数学段内吞引文的段级整组提交：落入同一段的引文链接与簇数字令牌
+    # 一一对应才整段替换为链接化的 "[N…]" 契约形态（全有或全无；
+    # 缺号/形态非法维持原数学段，不损失信息）
+    for (bidx, ms, me), pend in ref_math_pending.items():
+        rep = _cit_sup_replacement(blocks[bidx].content[ms:me], pend)
+        ok = rep is not None
+        if ok:
+            injections.setdefault(bidx, []).append(
+                [ms, me, pend[0][1], "ref", -1, rep])
+            for _n, t in pend:
+                if t.startswith("#"):
+                    result.anchors.add(t[1:])
+        for _n, _t in pend:
+            _stat("ref", ok)
 
     # 簇整组提交：任一成员未解析/未落块、或成员散落不同块 → 整组放弃
     # （部分矩形本就过不了单条校验，放弃即维持原纯文本，不损失信息）
@@ -1241,7 +1347,9 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
         for inj in sorted(spans):
             o0, o1, target = inj[0], inj[1], inj[2]
             if merged and merged[-1][2] == target and merged[-1][1] == o0 \
-                    and not target.startswith("fn:"):
+                    and not target.startswith("fn:") \
+                    and (len(inj) < 6 or inj[5] is None) \
+                    and (len(merged[-1]) < 6 or merged[-1][5] is None):
                 merged[-1][1] = o1  # 紧邻同目标：延伸前一区间
             else:
                 merged.append(inj)
@@ -1258,17 +1366,17 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                     slot[0] -= 1
                     slot[1] += 1
                 continue
-            if target.startswith("fn:"):
-                if len(inj) > 5 and inj[5] is not None:
-                    # 证据驱动剥离：自定义替换文本（如 "$f^{-4/3}$" + "[^2]"）
-                    content = content[:o0] + inj[5] + content[o1:]
-                else:
-                    content = content[:o0] + "[^" + target[3:] + "]" + content[o1:]
-                if len(inj) > 4 and not target[3:].isdigit():
-                    # 符号脚注：引用点真正写入才把定义段标成同号 label（防孤儿）
-                    blocks[inj[4]].note_label = target[3:]
+            if len(inj) > 5 and inj[5] is not None:
+                # 证据驱动替换（脚注剥离 / 数学段内吞引文追回）：自定义替换文本
+                # （如 "$f^{-4/3}$[^2]" / "$SIBs$[[19](#ref-19), [20](#ref-20)]"）
+                content = content[:o0] + inj[5] + content[o1:]
+            elif target.startswith("fn:"):
+                content = content[:o0] + "[^" + target[3:] + "]" + content[o1:]
             else:
                 content = content[:o0] + "[" + content[o0:o1] + "](" + target + ")" + content[o1:]
+            if target.startswith("fn:") and len(inj) > 4 and not target[3:].isdigit():
+                # 符号脚注：引用点真正写入才把定义段标成同号 label（防孤儿）
+                blocks[inj[4]].note_label = target[3:]
             last_start = o0
             if target.startswith("#"):
                 result.anchors.add(target[1:])

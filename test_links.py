@@ -875,6 +875,92 @@ class TestPublisherDests(unittest.TestCase):
         self.assertEqual(blocks[0].content, "Storage [5] and later [5] again.")
         self.assertEqual(res.stats.get("ref"), [0, 1])
 
+    def test_superscript_cite_math_tail_recovered(self):
+        # RSC 上标引文尾吞数学段（guo2017 实测）：PDF 是裸数字上标，引擎把
+        # "SIBs 19, 20" 归一成 $SIBs^{19, 20}$ → 剥出簇并逐号成链
+        text = "studied as cathodes for SIBs19, 20, and in particular Mn-based."
+        blocks = [
+            ProcessedBlock(
+                "paragraph",
+                content="studied as cathodes for $SIBs^{19, 20}$ , and in "
+                        "particular Mn-based.", src_page=0),
+            ProcessedBlock("reference", content="[19] X. Author, T.", src_page=1),
+            ProcessedBlock("reference", content="[20] Y. Author, U.", src_page=1),
+        ]
+        res = self._run(text, [("19", "bm_CR19"), ("20", "bm_CR20")], blocks)
+        self.assertEqual(
+            blocks[0].content,
+            "studied as cathodes for $SIBs$[[19](#ref-19), [20](#ref-20)] , "
+            "and in particular Mn-based.")
+        self.assertEqual(res.stats.get("ref"), [2, 0])
+
+    def test_superscript_cite_whole_span_range_recovered(self):
+        # 整段上标引文数学段含区间：$^{11-18}$ → [[11](#ref-11)-[18](#ref-18)]
+        text = "layered oxides, polyanion compounds, and Prussian-blue analogs 11-18 ."
+        blocks = [
+            ProcessedBlock(
+                "paragraph",
+                content="layered oxides, polyanion compounds, and Prussian-blue "
+                        "analogs $^{11-18}$ .", src_page=0),
+            ProcessedBlock("reference", content="[11] X. Author, T.", src_page=1),
+            ProcessedBlock("reference", content="[18] Y. Author, U.", src_page=1),
+        ]
+        res = self._run(text, [("11", "bm_CR11"), ("18", "bm_CR18")], blocks)
+        self.assertEqual(
+            blocks[0].content,
+            "layered oxides, polyanion compounds, and Prussian-blue analogs "
+            "[[11](#ref-11)-[18](#ref-18)] .")
+        self.assertEqual(res.stats.get("ref"), [2, 0])
+
+    def test_superscript_cite_span_incomplete_dropped(self):
+        # 簇内 2 的链接缺失/对不上 → 整段放弃（全有或全无，绝不拆一半）
+        text = "a smart choice, efficiently advancing reliability 1, 2. The cost"
+        blocks = [
+            ProcessedBlock(
+                "paragraph",
+                content="a smart choice, efficiently advancing reliability "
+                        "$^{1, 2}$ . The cost", src_page=0),
+            ProcessedBlock("reference", content="[1] X. Author, T.", src_page=1),
+            ProcessedBlock("reference", content="[2] Y. Author, U.", src_page=1),
+        ]
+        res = self._run(text, [("1", "bm_CR1")], blocks)
+        self.assertEqual(
+            blocks[0].content,
+            "a smart choice, efficiently advancing reliability $^{1, 2}$ . The cost")
+        self.assertEqual(res.stats.get("ref"), [0, 1])
+
+    def test_superscript_cite_bare_tail_split(self):
+        # 无 ^ 包裹的裸数字附录形态（forecast 脚注病例的引文版）：
+        # $f^{-4/3}2$ → $f^{-4/3}$[[2]](#ref-2)
+        text = "modes decrease in proportion to f^{-4/3}2 after the burst."
+        blocks = [
+            ProcessedBlock(
+                "paragraph",
+                content="modes decrease in proportion to $f^{-4/32}$ after "
+                        "the burst.", src_page=0),
+            ProcessedBlock("reference", content="[2] X. Author, T.", src_page=1),
+        ]
+        res = self._run(text, [("2", "bm_CR2")], blocks)
+        self.assertEqual(
+            blocks[0].content,
+            "modes decrease in proportion to $f^{-4/3}$[[2]](#ref-2) after "
+            "the burst.")
+        self.assertEqual(res.stats.get("ref"), [1, 0])
+
+    def test_isotope_span_not_citation_dropped(self):
+        # 同位素 $^{14}N$：段芯不以编号收尾，形态判据拒绝——即便链接落在
+        # 段内也绝不拆（防误伤真数学）
+        text = "the isotope 14N decays quickly."
+        blocks = [
+            ProcessedBlock("paragraph", content="the isotope $^{14}N$ decays "
+                                               "quickly.", src_page=0),
+            ProcessedBlock("reference", content="[14] X. Author, T.", src_page=1),
+        ]
+        res = self._run(text, [("14", "bm_CR14")], blocks)
+        self.assertEqual(blocks[0].content,
+                         "the isotope $^{14}N$ decays quickly.")
+        self.assertEqual(res.stats.get("ref"), [0, 1])
+
     def test_parse_dest_string(self):
         self.assertEqual(le._parse_dest_string("/FitR 0 446 596 437", 800.0),
                          (298.0, 358.5))
