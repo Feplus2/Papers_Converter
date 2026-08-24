@@ -516,6 +516,62 @@ def _find_swallowed_marker(lk: "_Link", label: str, blocks: list,
     return None
 
 
+def _find_standalone_sup_marker(lk: "_Link", label: str, blocks: list,
+                                math_spans: dict):
+    """跨边界锚点找回（friction 篇实测）：PDF 链接矩形覆盖的上标脚注标记被引擎
+    归一进数学段，锚区间在等值段内不可映射（严格/宽松两档与 math_hit 均落空）。
+    覆盖两种形态：
+      A. 独立上标段 $^{2}$（前缀/后缀证据：锚点文字的字母前缀须逐字贴在段前，
+         句读后缀须逐字贴在段后——防误认作者单位上标）；
+      B. 指数尾吞 $\\beta^{7}$（段芯以 ^{label} 收尾；剥掉后余部非空且括号平衡，
+         replacement 为 "$余部$[^N]$"——真指数不带脚注链接注释，dest 已验证即铁证）。
+    两形态合并计数，页内唯一才采纳；零命中/多义 → None（维持放弃，不凭猜拆数学）。
+    返回 (块下标, 段起, 段止, 替换文本)。
+    """
+    am = re.match(r"^([^\d]*?)(\d+)([^\d]*?)$", lk.text.strip())
+    if am is None or am.group(2) != label:
+        return None
+    pre_sk = _skeletonize(am.group(1))[0]
+    suf_sk = _skeletonize(am.group(3))[0]
+    standalone = re.compile(r"\$\^\{?" + re.escape(label) + r"\}?\$")
+    tail = re.compile(r"^(.+?)\^\{" + re.escape(label) + r"\}(\s*)$")
+    hits = []
+    for idx, b in enumerate(blocks):
+        if b.kind not in _INJECTABLE_KINDS:
+            continue
+        if getattr(b, "src_page", None) not in (lk.page, lk.page - 1):
+            continue
+        content = b.content or ""
+        spans = math_spans.get(idx)
+        if spans is None:
+            spans = [(m.start(), m.end()) for m in _MATH_SPAN_RE.finditer(content)]
+            math_spans[idx] = spans
+        for s, e in spans:
+            seg = content[s:e]
+            if standalone.fullmatch(seg) is not None:
+                # 形态 A：独立上标段，锚点前/后缀证据必须逐字贴合
+                if pre_sk and not _skeletonize(content[:s])[0].endswith(pre_sk):
+                    continue
+                if suf_sk and not _skeletonize(content[e:])[0].startswith(suf_sk):
+                    continue
+                hits.append((idx, s, e, f"[^{label}]"))
+                continue
+            # 形态 B：指数尾吞（段芯以 ^{label} 收尾，花括号必须有——$x^2$ 无括号
+            # 形态与真指数不可区分，沿用旧保守约定绝不拆；$x^{2}$ 带括号 + fn 类
+            # dest 链接铁证（真指数不带脚注链接注释）+ 页内唯一 → 拆）
+            tm = tail.match(seg[1:-1])
+            if tm is None:
+                continue
+            rest = tm.group(1)
+            if not rest or rest[-1] not in "}" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                continue
+            bare = rest.replace("\\{", "").replace("\\}", "")
+            if bare.count("{") != bare.count("}"):
+                continue
+            hits.append((idx, s, e, f"${rest}$[^{label}]"))
+    return hits[0] if len(hits) == 1 else None
+
+
 # 上标引文被引擎吞进数学段的两种形态（RSC 裸上标数字引文，guo2017 实测）：
 # 整段形态 "$^{19, 20}$" / "$^{3-10}$"（花括号可选、兼容收尾空格），
 # 尾吞形态 "$SIBs^{19, 20}$" / "$MgO^{34}$"（引文簇作为 ^{...} 尾巴接在
@@ -974,14 +1030,32 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
             # 源标记数字与 note_num 必须一致。符号脚注（∗/† 作者邮箱类）：
             # 源符号与脚注块首标记同符才链（label 用源可见字符）。
             idx = _target_block(lk)
-            if idx is None or blocks[idx].kind != "footnote":
+            if idx is not None and blocks[idx].kind != "footnote":
+                idx = None
+            dm = re.search(r"\d+", text)
+            # covering_block 落空/落错找回（friction 篇实测：多脚注同页 y 邻近
+            # 错配到兄弟脚注块 fn2→fn1，或跨界落到正文段落 fn4/fn6）——fn 类
+            # dest 已证明这是脚注链接、锚点数字即印刷编号，目标页同号
+            # footnote 块唯一则采纳（同页多脚注由编号区分，天然互斥）
+            if idx is not None and dm is not None:
+                n0 = getattr(blocks[idx], "note_num", None)
+                if n0 is not None and int(dm.group(0)) != n0:
+                    idx = None
+            if idx is None and dm is not None:
+                want = int(dm.group(0))
+                cands = [i for i, b in enumerate(blocks)
+                         if b.kind == "footnote"
+                         and getattr(b, "src_page", None) == lk.dest_page
+                         and getattr(b, "note_num", None) == want]
+                if len(cands) == 1:
+                    idx = cands[0]
+            if idx is None:
                 return None, "fn"
             fb = blocks[idx]
             n = getattr(fb, "note_num", None)
-            dm = re.search(r"\d+", text)
             if n is not None:
                 if dm is None or int(dm.group(0)) != n:
-                    return None, "fn"  # 编号对不上 → 放弃
+                    return None, "fn"
                 return f"fn:{n}", "fn"
             sym = text.strip(".,;:· ")
             if n is None and len(sym) == 1 and sym in _FN_SYM_MAP \
@@ -1247,6 +1321,19 @@ def collect_paper_links(blocks: list, source_pdf) -> LinkResult | None:
                 placed = (bidx, m_start, m_end)
                 fn_whole_math = True
                 fn_replacement = f"${rest}$[^{label}]"
+        if placed is None and target is not None \
+                and target.startswith("fn:") and target[3:].isdigit():
+            # 跨边界/尾吞锚点找回（friction 篇实测：上标脚注标记被引擎归一进
+            # 数学段，严格/宽松对齐落空；或 math_hit 命中但整段替换与
+            # 证据驱动剥离都拆不动的形态如 $\beta^{7}$）：
+            # 独立上标段 $^{N}$ / 指数尾吞两形态，页内唯一才动
+            label = target[3:]
+            hit = _find_standalone_sup_marker(lk, label, blocks, math_spans)
+            if hit is not None:
+                bidx, m_start, m_end, replacement = hit
+                placed = (bidx, m_start, m_end)
+                fn_whole_math = True
+                fn_replacement = replacement
         if placed is None and target is not None and cat == "ref" \
                 and (lk.dest_name.startswith("cite.")
                      or bool(_PUB_DEST_RE.search(lk.dest_name or ""))):

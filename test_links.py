@@ -637,6 +637,209 @@ class TestFootnoteLinks(unittest.TestCase):
                          "the growth $x^2$ after the burst.")
         self.assertEqual(res.stats.get("fn"), [0, 1])
 
+    def test_cross_boundary_sup_marker_recovered(self):
+        # friction 篇原形：PDF 链接矩形覆盖 "s2,"（正文+上标+句读），引擎把上标
+        # 归一为独立数学段 $^{2}$——锚区间跨文本/数学边界，严格/宽松两档对齐
+        # 均落空。证据（字母前缀 + 句读后缀 + 独立 $^{N}$ 段形态 + 页内唯一）
+        # 齐全 → 整段替换为 [^2]
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "For standard local strings2, we assume.",
+                         fontsize=11)
+        page.insert_text((72, 700), "2 This is not the case here.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("strings2,") + len("string")  # 链接矩形覆盖 "s2,"
+        links = [le._Link(0, c0, c0 + 3, "s2,", dest_name="equation.3-footnote.2",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph",
+            content="For standard local strings $^{2}$ , we assume.", src_page=0),
+            self._fn_block(2, "This is not the case here.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "For standard local strings [^2] , we assume.")
+        self.assertEqual(res.stats.get("fn"), [1, 0])
+
+    def test_cross_boundary_ambiguous_dropped(self):
+        # 跨边界找回的多义守卫：锚点无字母前缀（'4.'）且页内有两个独立 $^{4}$
+        # 段 → 多义放弃（维持原样，不损失信息）
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "first mention4. and second mention4. end.",
+                         fontsize=11)
+        page.insert_text((72, 700), "4 Footnote text.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("mention4.") + len("mention")
+        links = [le._Link(0, c0, c0 + 2, "4.", dest_name="equation.30-footnote.4",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph",
+            content="first mention $^{4}$ . and second mention $^{4}$ . end.",
+            src_page=0),
+            self._fn_block(4, "Footnote text.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "first mention $^{4}$ . and second mention $^{4}$ . end.")
+        self.assertEqual(res.stats.get("fn"), [0, 1])
+
+    def test_cross_boundary_prefix_disambiguates(self):
+        # 前缀证据的消歧价值：页内两个独立 $^{2}$ 段（strings² 与 university²），
+        # 锚点字母前缀 's' 选中前文中字符串收尾者
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "standard strings2 plus university2 addr.",
+                         fontsize=11)
+        page.insert_text((72, 700), "2 Footnote text.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("strings2") + len("string")
+        links = [le._Link(0, c0, c0 + 2, "s2", dest_name="Hfootnote.2",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph",
+            content="standard strings $^{2}$ plus university $^{2}$ addr.",
+            src_page=0),
+            self._fn_block(2, "Footnote text.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "standard strings [^2] plus university $^{2}$ addr.")
+        self.assertEqual(res.stats.get("fn"), [1, 0])
+
+    def test_resolve_fallback_when_covering_wrong_fn_block(self):
+        # friction fn2 原形：covering_block 把 fn2 的 dest 映射到同页兄弟脚注块
+        # fn1（y 邻近错配），编号失配后按"目标页同号 footnote 块唯一"兜底采纳 fn2
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "For standard local strings2, we assume.",
+                         fontsize=11)
+        page.insert_text((72, 700), "1 First note about omission.", fontsize=11)
+        page.insert_text((72, 720), "2 This is not the case here.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("strings2,") + len("string")
+        # dest 指向 fn1 的行（y=700）——covering_block 会错配到 fn1 块
+        links = [le._Link(0, c0, c0 + 2, "s2", dest_name="equation.3-footnote.2",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        fn1 = self._fn_block(1, "First note about omission.")
+        fn2 = self._fn_block(2, "This is not the case here.")
+        blocks = [ProcessedBlock(
+            "paragraph",
+            content="For standard local strings $^{2}$ , we assume.", src_page=0),
+            fn1, fn2]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "For standard local strings [^2] , we assume.")
+        self.assertEqual(res.stats.get("fn"), [1, 0])
+
+    def test_exponent_tail_marker_recovered(self):
+        # friction fn7 原形：上标标记被引擎吞成"指数"——$g^{7}$。锚区间在
+        # 等值段内不可映射（段芯 g^{7} 与页文本 g7 骨架错位），两档对齐与
+        # math_hit 均落空；段芯以 ^{7} 收尾 + 页内唯一 → 拆出为 $g$[^7]
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "the parameter g7 , which was set to 1.",
+                         fontsize=11)
+        page.insert_text((72, 700), "7 As before, we assume const.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("g7") + 1  # 标记数字 "7"
+        links = [le._Link(0, c0, c0 + 1, "7", dest_name="equation.49-footnote.7",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph",
+            content="the parameter $g^{7}$ , which was set to 1.", src_page=0),
+            self._fn_block(7, "As before, we assume const.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content,
+                         "the parameter $g$[^7] , which was set to 1.")
+        self.assertEqual(res.stats.get("fn"), [1, 0])
+
+    def test_exponent_tail_real_exponent_safe(self):
+        # 真指数 $x^{2}$ 但脚注编号是 3（段芯 ^{2} ≠ label 3）→ 拆不出，放弃
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 100), "the growth x3 , after.", fontsize=11)
+        page.insert_text((72, 700), "3 Footnote text.", fontsize=11)
+        fd, path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        doc.save(path)
+        doc.close()
+        doc = fitz.open(path)
+        pages = [le._Page(doc[0])]
+        c0 = pages[0].raw.find("x3") + 1
+        links = [le._Link(0, c0, c0 + 1, "3", dest_name="Hfootnote.5",
+                          dest_page=0, dest_x=72.0, dest_y=700.0)]
+        orig = le.extract_pdf_links
+        le.extract_pdf_links = lambda _pdf: (pages, links)
+        blocks = [ProcessedBlock(
+            "paragraph", content="the growth $x^{2}$ , after.", src_page=0),
+            self._fn_block(3, "Footnote text.")]
+        try:
+            res = collect_paper_links(blocks, path)
+        finally:
+            le.extract_pdf_links = orig
+            doc.close()
+        Path(path).unlink()
+        self.assertEqual(blocks[0].content, "the growth $x^{2}$ , after.")
+        self.assertEqual(res.stats.get("fn"), [0, 1])
+
     def test_no_renumber_when_not_bijection(self):
         # 锚定保守策略：marker 2 缺失（被吞/未定位）时定义编号保持原样，
         # 绝不整体重排（[^3] 不得变 [^2]）
