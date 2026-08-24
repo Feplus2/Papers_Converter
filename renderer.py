@@ -5,8 +5,10 @@
 """
 
 import logging
+import os
 import re
 import shutil
+import stat
 from pathlib import Path
 
 import yaml
@@ -81,7 +83,16 @@ def render_paper(
 
     # 复制 source.pdf（可选）
     if source_pdf and source_pdf.exists():
-        shutil.copy2(source_pdf, paper_dir / "source.pdf")
+        dst = paper_dir / "source.pdf"
+        if dst.exists():
+            # Windows：旧产物可能带只读属性（Zotero/同步来的 PDF 常只读，copy2 还会把只读位带进
+            # staging），只读文件既不能覆盖也不能删除——先清只读位
+            try:
+                os.chmod(dst, stat.S_IWRITE | stat.S_IREAD)
+            except OSError:
+                pass
+        # copyfile 只拷数据不带模式位，避免把源文件的只读属性传进产物
+        shutil.copyfile(source_pdf, dst)
 
     logger.info(f"  输出: {paper_md_path}")
     return paper_md_path
