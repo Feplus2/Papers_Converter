@@ -6,6 +6,7 @@ Papers_Converter — 论文 PDF → Pandoc Markdown 转换管线（通用，不�
     python pipeline.py <paper.pdf>               # 完整管线：PDF→引擎解析→MD
     python pipeline.py <paper.pdf> --no-ocr      # 文字版 PDF（不强制 OCR）
     python pipeline.py <paper.pdf> --model pipeline  # MinerU 换 pipeline 后端（A/B）
+    python pipeline.py <paper.xml>               # XML 管线（JATS/Elsevier 全文→MD）
     python pipeline.py <parsed_dir>              # 仅转换已解析产物目录
     python pipeline.py <parsed_key>              # 仅转换（Zotero key，示例数据源）
     python pipeline.py --all                     # 批量转换 parsed/ 下全部论文
@@ -59,6 +60,8 @@ def convert_single(
     emit_finish: bool = True,
     extra_finish_fields: dict | None = None,
     keep_links: bool | None = None,
+    meta_override: dict | None = None,
+    refs_override: dict | None = None,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -78,6 +81,11 @@ def convert_single(
             {"incomplete": True, "qc_warnings": [...]}）
         keep_links: 是否保留 PDF 原生链接（P1，见 link_extractor）；
             None 时取 config.PDF_LINKS。仅当 source_pdf 存在且有链接注释时生效
+        meta_override: XML 管线专用——stage1_xml 提取的 front matter 权威元数据，
+            走 zotero_meta 同通道覆盖（author/date/container-title 等以它为准）；
+            None 时 PDF 路径行为不变
+        refs_override: XML 管线专用——<ref-list> 结构化 references payload，
+            代替文本切分+LLM 重建（PDF 路径 None 走原逻辑）
 
     Returns:
         paper.md 路径，失败返回 None
@@ -107,13 +115,16 @@ def convert_single(
 
     logger.info(f"  加载 {len(content_list)} 个内容块")
 
-    # Stage 2: 元数据提取（Zotero/CSL-JSON 权威元数据优先，LLM 只补 abstract）
+    # Stage 2: 元数据提取（Zotero/CSL-JSON 权威元数据优先，LLM 只补 abstract；
+    # XML 管线的 front matter（meta_override）与其同通道——都是结构化权威源）
     t2 = time.time()
     if reporter:
         reporter.update_stage(2, "元数据提取", "提取论文元数据...")
     zotero_meta = get_zotero_meta(zotero_key) if zotero_key else None
+    if meta_override:
+        zotero_meta = {**(zotero_meta or {}), **{k: v for k, v in meta_override.items() if v}}
     if zotero_meta:
-        logger.info("  命中 Zotero CSL 元数据（author/date/container-title/citekey 以它为准）")
+        logger.info("  命中结构化权威元数据（author/date/container-title/citekey 以它为准）")
     metadata = extract_metadata(content_list, use_llm=use_llm, zotero_meta=zotero_meta)
     if zotero_key:
         metadata["zotero_key"] = zotero_key
@@ -166,15 +177,21 @@ def convert_single(
     # P2.1 参考文献条目结构化：在链接注入之前取净文本切分（raw 不含链接语法），
     # 渲染后落 references.json（纯增量产物，paper.md 逐字节不动）。
     # 条目编号同时用于"ref 锚点无条件发射"（任务：卡片点击代理需要每条目都有
-    # 锚点，无链接 PDF/旧产物也覆盖；与链接驱动锚点在渲染器去重合并）
+    # 锚点，无链接 PDF/旧产物也覆盖；与链接驱动锚点在渲染器去重合并）。
+    # XML 管线：refs_override（<ref-list> 结构化提取）直接采用，跳过文本切分
     refs_payload = None
     ref_entry_nums: list[int] = []
     try:
-        from reference_parser import prepare_references, split_reference_entries
-        ref_entry_nums = [e["n"] for e in split_reference_entries(blocks)
-                          if e["n"] is not None]
-        if config.REFS_JSON:
-            refs_payload = prepare_references(blocks, use_llm=use_llm)
+        if refs_override is not None:
+            refs_payload = refs_override
+            ref_entry_nums = [r["n"] for r in refs_override.get("references", [])
+                              if r.get("n") is not None]
+        else:
+            from reference_parser import prepare_references, split_reference_entries
+            ref_entry_nums = [e["n"] for e in split_reference_entries(blocks)
+                              if e["n"] is not None]
+            if config.REFS_JSON:
+                refs_payload = prepare_references(blocks, use_llm=use_llm)
     except Exception as e:
         logger.warning(f"  参考文献结构化失败（不影响转换）: {e}")
 
@@ -214,7 +231,8 @@ def convert_single(
     if reporter:
         reporter.complete_stage(4, "渲染装订", time.time() - t4)
 
-    # P2.1 落盘 references.json（与 paper.md 同级；payload 在链接注入前已备好）
+    # P2.1 落盘 references.json（与 paper.md 同级；payload 在链接注入前已备好；
+    # XML 管线的结构化 payload 无条件落盘——它比 PDF 路径文本重建可靠，是核心产物）
     if refs_payload is not None:
         try:
             from reference_parser import dump_references
@@ -222,7 +240,7 @@ def convert_single(
             logger.info(
                 f"  references.json: {refs_payload['count']} 条"
                 f"（source={refs_payload['source']}，"
-                f"doi {sum(1 for r in refs_payload['references'] if r['doi'])} 条）")
+                f"doi {sum(1 for r in refs_payload['references'] if r.get('doi'))} 条）")
         except Exception as e:
             logger.warning(f"  references.json 落盘失败（不影响产物）: {e}")
 
@@ -616,6 +634,91 @@ def convert_pdf(
     return paper_md
 
 
+def _enrich_xml_refs(refs_payload: dict) -> dict:
+    """XML 参考文献 LLM 补齐：mixed-citation-only 存档（无 element-citation 结构）的
+    条目缺 title/authors/doi 等字段时，走与 PDF 路径相同的 LLM 提取（质量下限
+    不低于 PDF 路径，蓝本验收口径）；LLM 失败/条目数对不上保持 XML 原始 payload，
+    XML 已有的结构化字段（element-citation 提取）永远优先。"""
+    try:
+        from reference_parser import build_references
+        structured_keys = ("title", "authors", "year", "venue", "doi")
+        entries_all_plain = all(
+            not any(r.get(k) for k in structured_keys)
+            for r in refs_payload["references"])
+        if not entries_all_plain:
+            return refs_payload
+        entries = [{"n": r.get("n"), "raw": r.get("raw", "")}
+                   for r in refs_payload["references"]]
+        items, source = build_references(entries, use_llm=True)
+        if source != "llm" or items is None or len(items) != len(entries):
+            logger.info("  XML 参考文献 LLM 补齐未启用/未命中，保持 raw 条目")
+            return refs_payload
+        merged = []
+        for xml_r, llm_r in zip(refs_payload["references"], items):
+            merged.append({**llm_r, **{k: v for k, v in xml_r.items()
+                                       if v is not None and v != ""}})
+        logger.info(f"  XML 参考文献 LLM 补齐: {len(merged)} 条（XML 结构化字段优先）")
+        return {**refs_payload, "source": "xml+llm", "references": merged}
+    except Exception as e:
+        logger.warning(f"  XML 参考文献 LLM 补齐失败（保持原始 payload）: {e}")
+        return refs_payload
+
+
+def convert_xml(
+    xml_path: Path,
+    output_dir: Path,
+    use_llm: bool = True,
+    zotero_key: str | None = None,
+    headless: bool = False,
+) -> Path | None:
+    """XML 管线：JATS / Elsevier XML → content_list 适配 → 与 PDF 路径同构的 paper.md。
+
+    与 convert_pdf 的差异：解析本地确定性（无 OCR/VLM/无退化重试/无完整性闸）；
+    front matter 元数据（xml_meta.json）与 <ref-list> 结构化参考文献
+    （xml_references.json）作为权威源直通下游（meta_override/refs_override）。
+    keep_links 不适用（无源 PDF 链接注释；ref-N 锚点由结构化条目号发射）。
+    """
+    from stage1_xml import parse as parse_xml
+
+    xml_path = Path(xml_path)
+    if not xml_path.exists():
+        logger.error(f"XML 不存在: {xml_path}")
+        return None
+
+    reporter = HeadlessProgress(xml_path.stem, engine="xml") if headless else None
+    if reporter:
+        reporter.start()
+
+    digest = hashlib.md5(xml_path.read_bytes()).hexdigest()[:6]
+    staging_dir = output_dir / "_staging" / f"{xml_path.stem}-{digest}"
+
+    def _on_progress(detail: str, frac: float | None = None):
+        logger.info(f"  {detail}")
+        if reporter:
+            reporter.update_stage(1, "xml", detail, frac)
+
+    logger.info(f"\n=== Stage 1: XML 解析 {xml_path.name} ===")
+    if reporter:
+        reporter.update_stage(1, "xml", f"XML 解析 {xml_path.name}")
+    t1 = time.time()
+    parse_xml(xml_path, staging_dir, progress=_on_progress)
+    if reporter:
+        reporter.complete_stage(1, "xml", time.time() - t1)
+
+    meta_override = json.loads(
+        (staging_dir / "xml_meta.json").read_text(encoding="utf-8"))
+    refs_raw = (staging_dir / "xml_references.json").read_text(encoding="utf-8")
+    refs_override = json.loads(refs_raw)
+    if refs_override and use_llm:
+        refs_override = _enrich_xml_refs(refs_override)
+
+    return convert_single(
+        staging_dir, output_dir, use_llm=use_llm,
+        zotero_key=zotero_key, reporter=reporter,
+        meta_override=meta_override, refs_override=refs_override,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Papers_Converter — 论文 PDF → Pandoc Markdown（通用管线）",
@@ -633,7 +736,7 @@ def main():
     parser.add_argument(
         "target",
         nargs="?",
-        help="PDF 文件 / 已解析目录 / Zotero key",
+        help="PDF 文件 / XML 文件（JATS/Elsevier 全文，按扩展名分派）/ 已解析目录 / Zotero key",
     )
     parser.add_argument(
         "--all",
@@ -778,8 +881,20 @@ def main():
         target = args.target
         target_path = Path(target)
 
+        # 情况 0：XML 文件（JATS / Elsevier 变体）→ XML 管线（按扩展名嗅探分派，
+        # 与 SageRead 任务通道 payload 的 input_format 同口径；立项五问之五）
+        if target_path.suffix.lower() == ".xml" and target_path.is_file():
+            try:
+                result = convert_xml(target_path, output_dir, use_llm=use_llm,
+                                     headless=args.headless)
+            except Exception as e:
+                logger.exception("  转换失败")
+                if args.headless:
+                    emit_error(str(e) or (err_capture.first if err_capture else "")
+                               or "转换失败")
+                sys.exit(1)
         # 情况 1：PDF 文件 → 完整管线（PDF→解析引擎→MD）
-        if target_path.suffix.lower() == ".pdf" or target_path.is_file():
+        elif target_path.suffix.lower() == ".pdf" or target_path.is_file():
             provider_opts = {"model": args.model} if args.model else None
             try:
                 result = convert_pdf(target_path, output_dir, use_llm=use_llm,

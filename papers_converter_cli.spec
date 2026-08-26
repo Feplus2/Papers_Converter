@@ -13,6 +13,8 @@ a = Analysis(
                    # ocr_provider 用 importlib 懒加载 provider，静态分析扫不到，必须显式列出
                    'ocr_provider', 'stage1_mineru', 'stage1_glm', 'stage1_paddleocr',
                    'stage1_layout',
+                   # XML 管线（convert_xml 内懒加载，静态分析扫不到）
+                   'stage1_xml', 'mathml_tex',
                    # 结构判定模块（structure_llm 为函数内懒加载，静态分析扫不到）
                    'cover_detect', 'article_boundary', 'structure_llm'],
     hookspath=[],
