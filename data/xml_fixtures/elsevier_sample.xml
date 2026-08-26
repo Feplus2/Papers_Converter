@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Elsevier ce: 变体合成样本（按 ScienceDirect 全文 XML 公开 DTD 结构构造；
+     公式走 ce:formula + mml:math（真实 MathML 形态）、表格 ce:table、文献 ce:bib）。
+     真实样本联调待 ELSEVIER_API_KEY（zotero-brain-slim Phase 1.5 后）。 -->
+<doc:document xmlns:doc="http://www.elsevier.com/xml/document/2.0"
+              xmlns:ce="http://www.elsevier.com/xml/common/schema"
+              xmlns:mml="http://www.w3.org/1998/Math/MathML">
+  <iteminfo>
+    <doi>10.1016/j.jpowsour.2024.234567</doi>
+    <pubdate>2024-06-15</pubdate>
+  </iteminfo>
+  <ce:journal-title>Journal of Power Sources</ce:journal-title>
+  <ce:title>Sodium-ion battery cathode materials: degradation mechanisms and design strategies</ce:title>
+  <ce:author-group>
+    <ce:author>
+      <ce:given-name>Wei</ce:given-name>
+      <ce:surname>Zhang</ce:surname>
+    </ce:author>
+    <ce:author>
+      <ce:given-name>Maria</ce:given-name>
+      <ce:surname>Chen</ce:surname>
+    </ce:author>
+  </ce:author-group>
+  <ce:abstract>
+    <ce:para>Sodium-ion batteries are a promising alternative to lithium-ion systems for stationary storage. This review summarizes degradation mechanisms of layered oxide cathodes and outlines design strategies including element substitution and electrolyte additives.</ce:para>
+  </ce:abstract>
+  <ce:sections>
+    <ce:section>
+      <ce:section-title>Introduction</ce:section-title>
+      <ce:para>Sodium-ion batteries (SIBs) have attracted renewed attention due to the abundance of sodium resources. The energy density of the cell is given by
+        <ce:formula type="display"><ce:label>1</ce:label>
+          <mml:math><mml:mrow>
+            <mml:mi>E</mml:mi><mml:mo>=</mml:mo>
+            <mml:mfrac><mml:mrow><mml:mi>C</mml:mi><mml:mo>×</mml:mo><mml:mi>V</mml:mi></mml:mrow><mml:mn>3.6</mml:mn></mml:mfrac>
+          </mml:mrow></mml:math>
+        </ce:formula>
+        where C is the capacity and V the average voltage.
+      </ce:para>
+      <ce:para>The diffusion coefficient follows the Arrhenius law with the square root of temperature dependence:
+        <ce:formula type="display"><ce:label>2</ce:label>
+          <mml:math><mml:mrow>
+            <mml:mi>D</mml:mi><mml:mo>=</mml:mo>
+            <mml:msub><mml:mi>D</mml:mi><mml:mn>0</mml:mn></mml:msub>
+            <mml:msup><mml:mi>e</mml:mi>
+              <mml:mrow><mml:mo>-</mml:mo>
+                <mml:mfrac>
+                  <mml:msub><mml:mi>E</mml:mi><mml:mi>a</mml:mi></mml:msub>
+                  <mml:mrow><mml:mi>k</mml:mi><mml:mi>T</mml:mi></mml:mrow>
+                </mml:mfrac>
+              </mml:mrow>
+            </mml:msup>
+          </mml:mrow></mml:math>
+        </ce:formula>
+      </ce:para>
+    </ce:section>
+    <ce:section>
+      <ce:section-title>Methods</ce:section-title>
+      <ce:section>
+        <ce:section-title>Electrochemical tests</ce:section-title>
+        <ce:para>Coin cells were assembled in an argon-filled glovebox. The ionic conductivity σ was measured by EIS, where σ&#160;=&#160;1/(R<ce:inf>b</ce:inf>A) with the bulk resistance R<ce:inf>b</ce:inf>.</ce:para>
+        <ce:para>The transfer matrix of the impedance model is:
+          <ce:formula type="display"><ce:label>3</ce:label>
+            <mml:math><mml:mrow>
+              <mml:mi>M</mml:mi><mml:mo>=</mml:mo>
+              <mml:mfenced open="[" close="]">
+                <mml:mtable>
+                  <mml:mtr><mml:mtd><mml:mi>a</mml:mi></mml:mtd><mml:mtd><mml:mi>b</mml:mi></mml:mtd></mml:mtr>
+                  <mml:mtr><mml:mtd><mml:mi>c</mml:mi></mml:mtd><mml:mtd><mml:mi>d</mml:mi></mml:mtd></mml:mtr>
+                </mml:mtable>
+              </mml:mfenced>
+            </mml:mrow></mml:math>
+        </ce:formula></ce:para>
+      </ce:section>
+      <ce:section>
+        <ce:section-title>Materials characterization</ce:section-title>
+        <ce:para>XRD patterns were collected, and the lattice parameters were refined by the Rietveld method. The square root of the scan rate gives the kinetic limit: <ce:formula type="inline"><mml:math><mml:msqrt><mml:mi>v</mml:mi></mml:msqrt></mml:math></ce:formula>.</ce:para>
+      </ce:section>
+    </ce:section>
+    <ce:section>
+      <ce:section-title>Results</ce:section-title>
+      <ce:para>Cycling performance is summarized in Table 1.</ce:para>
+      <ce:table>
+        <ce:caption>Capacity retention of layered oxide cathodes after 200 cycles.</ce:caption>
+        <table xmlns="http://www.w3.org/1999/xhtml">
+          <thead><tr><th>Sample</th><th>Retention (%)</th></tr></thead>
+          <tbody>
+            <tr><td>NNM-622</td><td>82.4</td></tr>
+            <tr><td>NNM-622@Ti</td><td>91.7</td></tr>
+          </tbody>
+        </table>
+      </ce:table>
+      <ce:figure>
+        <ce:label>Figure 1</ce:label>
+        <ce:caption>Morphology of the pristine cathode particles observed by SEM.</ce:caption>
+        <ce:link href="fig1_sem.jpg" role="http://www.elsevier.com/xml/link/roles/image"/>
+      </ce:figure>
+      <ce:figure>
+        <ce:label>Figure 2</ce:label>
+        <ce:caption>Cycling curves at 1C.</ce:caption>
+        <ce:link href="https://example.com/remote_fig2.png" role="http://www.elsevier.com/xml/link/roles/image"/>
+      </ce:figure>
+    </ce:section>
+  </ce:sections>
+  <ce:bibliography>
+    <ce:bib-reference>
+      <ce:label>1</ce:label>
+      <ce:textref>H. Pan, Y.-S. Hu, L. Chen, Room-temperature stationary sodium-ion batteries for large-scale electric energy storage, Energy Environ. Sci. 6 (2013) 2338–2360. https://doi.org/10.1039/c3ee40847g</ce:textref>
+    </ce:bib-reference>
+    <ce:bib-reference>
+      <ce:label>2</ce:label>
+      <ce:textref>J.-Y. Hwang, S.-T. Myung, Y.-K. Sun, Sodium-ion batteries: present and future, Chem. Soc. Rev. 46 (2017) 3529–3614. doi: 10.1039/C6CS00776G</ce:textref>
+    </ce:bib-reference>
+    <ce:bib-reference>
+      <ce:label>3</ce:label>
+      <ce:textref>N. Yabuuchi, K. Kubota, M. Dahbi, S. Komaba, Research development on sodium-ion batteries, Chem. Rev. 114 (2014) 11636–11682.</ce:textref>
+    </ce:bib-reference>
+  </ce:bibliography>
+</doc:document>

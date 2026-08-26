@@ -1,0 +1,519 @@
+<?xml version="1.0" encoding="UTF-8"?><article xml:lang="en" article-type="research-article"><front><journal-meta><journal-id journal-id-type="pmc-domain-id">3686</journal-id><journal-id journal-id-type="pmc-domain">acsomega</journal-id><journal-title-group><journal-title>ACS Omega</journal-title><abbrev-journal-title>ACS Omega</abbrev-journal-title></journal-title-group><publisher><publisher-name>American Chemical Society</publisher-name></publisher></journal-meta><article-meta><article-id pub-id-type="pmcid">PMC11209695</article-id><article-id pub-id-type="pmcaid">11209695</article-id><article-id pub-id-type="pmcaiid">11209695</article-id><article-id pub-id-type="pmid">38947830</article-id><article-id pub-id-type="doi">10.1021/acsomega.4c00921</article-id><title-group><article-title>Simulation Study
+on Temperature Control Performance
+of Lithium-Ion Battery Fires by Fine Water Mist in Energy Storage
+Stations</article-title></title-group><contrib-group content-type="author"><contrib><name name-style="western"><surname>Yao</surname><given-names initials="H">Haowei</given-names></name><xref ref-type="aff" rid="aff1">†</xref><xref ref-type="aff" rid="aff2">‡</xref></contrib><contrib><name name-style="western"><surname>Lv</surname><given-names initials="K">Kefeng</given-names></name><xref ref-type="aff" rid="aff1">†</xref></contrib><contrib><name name-style="western"><surname>Lou</surname><given-names initials="Z">Zhen</given-names></name><xref ref-type="aff" rid="aff1">†</xref><xref ref-type="aff" rid="aff2">‡</xref><xref rid="cor1" ref-type="author-notes">*</xref></contrib><contrib><name name-style="western"><surname>Huang</surname><given-names initials="J">Junqi</given-names></name><xref ref-type="aff" rid="aff1">†</xref></contrib><contrib><name name-style="western"><surname>Zhang</surname><given-names initials="Y">Yang</given-names></name><xref ref-type="aff" rid="aff3">§</xref></contrib><contrib><name name-style="western"><surname>Zhang</surname><given-names initials="Z">Zhuang</given-names></name><xref ref-type="aff" rid="aff1">†</xref></contrib><contrib><name name-style="western"><surname>Wang</surname><given-names initials="M">Min</given-names></name><xref ref-type="aff" rid="aff4">∥</xref></contrib><contrib><name name-style="western"><surname>Wei</surname><given-names initials="X">Xiaoge</given-names></name><xref ref-type="aff" rid="aff1">†</xref><xref ref-type="aff" rid="aff2">‡</xref><xref rid="cor2" ref-type="author-notes">*</xref></contrib></contrib-group><aff id="aff1"><label>†</label>School
+of Building Environment Engineering, Zhengzhou
+University of Light Industry, Zhengzhou 450002, PR China</aff><aff id="aff2"><label>‡</label>Zhengzhou
+Key Laboratory of Electric Power Fire Safety, Zhengzhou University of Light Industry, Zhengzhou 450001, PR China</aff><aff id="aff3"><label>§</label>School
+of Electrical Information Engineering, Henan
+University of Engineering, Zhengzhou 451191, PR China</aff><aff id="aff4"><label>∥</label>State
+Grid Henan Electric Power Ultra High Voltage Company, Zhengzhou 450000, PR China</aff><author-notes><fn id="cor1"><label>*</label><p>Email: <email>loganlz@zzuli.edu.cn</email>.</p></fn><fn id="cor2"><label>*</label><p>Email: <email>2015041@zzuli.edu.cn</email>.</p></fn></author-notes><pub-date><day>12</day><month>6</month><year>2024</year></pub-date><volume>9</volume><issue>25</issue><fpage>27104</fpage><page-range>27104–27112</page-range><pub-history><event event-type="pmc-release"><date><day>28</day><month>6</month><year>2024</year></date></event></pub-history><permissions><copyright-statement>© 2024 The Authors. Published by American Chemical Society</copyright-statement><license><license-p>Permits non-commercial access and re-use, provided that author attribution and integrity are maintained; but does not permit creation of adaptations or other derivative works (<ext-link xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="https://creativecommons.org/licenses/by-nc-nd/4.0/" ext-link-type="uri">https://creativecommons.org/licenses/by-nc-nd/4.0/</ext-link>).</license-p></license></permissions><self-uri xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="ao4c00921.pdf" content-type="pmc-pdf"><?cloudpmc-path 25e2/11209695/3f519f380670/ao4c00921.pdf?><?cloudpmc-bucket app?><?size 7619041?></self-uri><abstract id="abstract1"><title>Abstract</title><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="ab-tgr1" xlink:href="ao4c00921_0013.jpg"><?cloudpmc-path blobs/25e2/11209695/0c5acd04b617/ao4c00921_0013.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 562?><?original-width 834?><?scaled-height 375?><?scaled-width 556?></graphic><p>The combustion of
+lithium-ion batteries is characterized
+by fast
+ignition, prolonged duration, high combustion temperature, release
+of significant energy, and generation of a large number of toxic gases.
+Fine water mist has characteristics such as a high fire extinguishing
+efficiency and environmental friendliness. In order to thoroughly
+investigate the temperature control effect of fine water mist on lithium-ion
+battery fires. This study employs numerical simulation methods, utilizing
+PyroSim software to simulate the fire process in lithium-ion battery
+energy storage compartments. First, we focus on the variation patterns
+of flame, changes in combustion temperature, and heat release rate
+over time at environmental temperatures of 10, 25, and 35 °C.
+Subsequently, the suppression of flame, reduction in temperature,
+and changes in heat release rate are simulated for water mist in lithium-ion
+battery fires. The simulation results indicate that the environmental
+temperature has a considerable impact on the flame but a lesser effect
+on the heat release rate. Fine water mist effectively impedes the
+spread of thermal runaway between internal battery core cells, leading
+to a reduction in the flame size and a significant decrease in the
+maximum temperature and heat release rate. The numerical simulation
+results can provide scientific guidance for the prevention and control
+of fires in lithium-ion battery energy storage compartments.</p></abstract><custom-meta-group><custom-meta><meta-name>status</meta-name><meta-value>released</meta-value></custom-meta><custom-meta><meta-name>display-pdf</meta-name><meta-value>yes</meta-value></custom-meta><custom-meta><meta-name>is-olf</meta-name><meta-value>no</meta-value></custom-meta><custom-meta><meta-name>is-manuscript</meta-name><meta-value>no</meta-value></custom-meta><custom-meta><meta-name>is-preprint</meta-name><meta-value>no</meta-value></custom-meta><custom-meta><meta-name>is-journal-matter</meta-name><meta-value>no</meta-value></custom-meta><custom-meta><meta-name>is-scanned</meta-name><meta-value>no</meta-value></custom-meta><custom-meta><meta-name>is-retracted</meta-name><meta-value>no</meta-value></custom-meta></custom-meta-group></article-meta><notes notes-type="article-notes"><sec id="historyarticle-meta1" sec-type="history" disp-level="2"><p>Received 2024 Jan 29; Accepted 2024 May 31; Revised 2024 Apr 3; Collection date 2024 Jun 25.</p></sec></notes></front><body><sec id="sec1" disp-level="1"><label>1.</label><title>Introduction</title><p>With the advancement of
+society, electronic devices have experienced
+robust development, and lithium-ion batteries have emerged as a prominent
+choice due to their high volumetric and gravimetric energy density,
+long cycle life, low self-discharge, absence of memory effect, and
+environmentally friendly characteristics, along with a broad operating
+temperature range. Moreover, the excellent charge–discharge
+performance and low environmental impact of lithium-ion batteries
+align with the current global trend in the battery industry, emphasizing
+green and sustainable development as well as the ongoing pursuit of
+smaller, lighter, and more efficient batteries. In recent years, energy
+storage has garnered widespread attention,<sup><xref rid="ref1" ref-type="bibr">1</xref></sup> prompting many countries to incorporate lithium-ion batteries into
+energy storage systems. Originally applied in battery cells and capacity
+energy storage systems, lithium-ion batteries have progressively found
+applications in large-scale energy storage station systems for grid
+energy storage. However, despite the rapid development and extensive
+application, incidents of fires at energy storage stations have become
+more prevalent in various countries. <xref rid="fig1" ref-type="fig">Figure <xref rid="fig1" ref-type="fig">1</xref></xref> presents a statistical overview of the occurrences
+of fires at energy storage facilities in recent years.</p><fig id="fig1" position="float"><?disp-level 2?><label>Figure 1</label><caption><p>Fire incidents at energy
+storage stations in recent years (from <ext-link xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="https://www.escn.com.cn/20231223/d098c998456d4e26b693db285bb6bb5c/c.html" ext-link-type="uri">https://www.escn.com.cn/20231223/d098c998456d4e26b693db285bb6bb5c/c.html</ext-link>).</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr1" xlink:href="ao4c00921_0001.jpg"><?cloudpmc-path blobs/25e2/11209695/7818984bead6/ao4c00921_0001.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 1893?><?original-width 2400?><?scaled-height 626?><?scaled-width 794?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0001.gif"><?cloudpmc-path blobs/25e2/11209695/53ecc69a9413/ao4c00921_0001.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig><p>Experts and scholars, addressing
+diverse fields
+and needs, have
+proposed and developed various energy storage technologies to meet
+human demands. Among these, lithium-ion battery energy storage technology
+stands out as the most feasible means. The development of lithium-ion
+batteries has progressed alongside advancements in materials science
+and intercalation science.<sup><xref rid="ref2" ref-type="bibr">2</xref></sup> As the share
+of new energy rapidly increases in the overall energy system.<sup><xref rid="ref3" ref-type="bibr">3</xref>,<xref rid="ref4" ref-type="bibr">4</xref></sup> Lithium-ion battery energy storage technology has witnessed swift
+development in the field of new energy.</p><p>In recent years, both
+domestic and international scholars have
+increasingly dedicated their efforts to the study of lithium-ion battery
+fires. The National Transportation Safety Board (NTSB) in the United
+States conducted experiments on the heat release rate of lithium-ion
+batteries to determine factors such as combustion heat release, combustion
+time, and temperature.<sup><xref rid="ref5" ref-type="bibr">5</xref></sup> The Federal Aviation
+Administration (FAA) conducted numerous fire simulation experiments
+to ascertain the fire characteristics of lithium-ion batteries.<sup><xref rid="ref6" ref-type="bibr">6</xref>−<xref rid="ref8" ref-type="bibr">8</xref></sup> Meanwhile, researchers like Chen conducted thermal runaway experiments
+on the type of 18650 lithium-ion batteries with different charge amounts,
+observing experimental phenomena to study various characteristics
+of lithium-ion batteries after combustion.<sup><xref rid="ref9" ref-type="bibr">9</xref>−<xref rid="ref11" ref-type="bibr">11</xref></sup> Sarkos focused
+on lithium-ion batteries with Licoo<sub>2</sub> as the cathode material,
+analyzing the distribution of surface temperatures and studying changes
+in heat generation based on internal chemical reactions, variations
+in the discharge structure of lithium-ion batteries, and polarization
+phenomena during the reaction process.<sup><xref rid="ref12" ref-type="bibr">12</xref></sup> Sato examined heat generation during the charge–discharge
+process of lithium-ion batteries, deriving formulas for the source
+and magnitude of heat through analysis and verification.<sup><xref rid="ref13" ref-type="bibr">13</xref></sup> Hesse provided an overview of lithium-ion battery
+energy storage technology and its characteristics in terms of performance
+and aging. This analysis included a detailed examination of the storage
+system design based on evaluations of actual projects. Hesse proposed
+further research to fully exploit the potential of stationary battery
+energy storage systems, emphasizing the need for future studies to
+adopt a holistic system-level approach.<sup><xref rid="ref14" ref-type="bibr">14</xref></sup> Darcovich have studied the scenarios of electricity and cogeneration
+through simulation, and combine lithium-ion battery technology based
+on electrochemical fundamentals, treat transient battery charging
+and discharging.<sup><xref rid="ref15" ref-type="bibr">15</xref></sup> Chirkov have used computer
+simulation methods; the influence of the structure of the cathode
+active layer on the overall characteristics of lithium batteries during
+charging and discharging was elucidated. A series of obstacles in
+the process of improving the overall characteristics of lithium batteries
+were revealed.<sup><xref rid="ref16" ref-type="bibr">16</xref></sup> Wang et al. highlighted
+that the main causes of battery fires are combustible gases and electrolytes
+overflowing from safety valves. While agents like HFC-227ea can quickly
+extinguish flames, the intense chemical reactions within the battery
+may cause it to reignite. Wang reviewed thermal runaway phenomena
+and related fire dynamics in single lithium-ion cells and battery
+packs, discussing potential fire prevention measures.<sup><xref rid="ref17" ref-type="bibr">17</xref>,<xref rid="ref18" ref-type="bibr">18</xref></sup> Zhang et al. utilized fault tree analysis and Bayesian network methods
+to assess the fire risk of Lithium-ion Battery Energy Storage Systems
+(LBESS) during maritime transport, calculating the probability of
+fire incidents during the transportation process.<sup><xref rid="ref19" ref-type="bibr">19</xref></sup> Liu et al. proposed a one-dimensional voltage-correlated
+convolutional neural network (1DVCNN) to detect and locate internal
+short-circuit faults in lithium-ion battery energy storage systems
+for timely diagnosis of faults.<sup><xref rid="ref20" ref-type="bibr">20</xref></sup> Dong
+established a comprehensive reliability assessment method for battery
+energy storage systems, considering both the health index of batteries
+and the impact of thermal runaway faults.<sup><xref rid="ref21" ref-type="bibr">21</xref></sup> Xu et al. based on the whole life cycle theory, developed an evaluation
+model for critical aspects of energy storage station construction
+and operation, providing a rational assessment of the benefits of
+lithium-ion battery energy storage stations on the generation side.<sup><xref rid="ref22" ref-type="bibr">22</xref></sup> Yang found that failure to promptly dilute combustible
+gas concentrations could lead to explosions initiated by combustible
+gases produced by individual battery modules through a study on the
+gas explosion risk of containerized lithium-ion battery energy storage
+stations.<sup><xref rid="ref23" ref-type="bibr">23</xref></sup> Sun and Wang conducted fire
+and extinguishing tests on Li/graphite electrodes, comparing the inhibitory
+effects of fire extinguishing agents on the propagation of thermal
+runaway in confined spaces.<sup><xref rid="ref24" ref-type="bibr">24</xref></sup> Ye et al.
+investigated the dynamic thermal behavior of overcharging batteries
+under adiabatic conditions, concluding that constant current-constant
+voltage-constant current overcharging is more dangerous than constant
+current overcharging.<sup><xref rid="ref25" ref-type="bibr">25</xref></sup> Xie et al. have
+used PyroSim software to simulate the fire scenario caused by thermal
+runaway of lithium-ion batteries stored in warehouses, the temperature
+change, heat release rate, visibility change, and CO volume fraction
+change around the fire ignition source.<sup><xref rid="ref26" ref-type="bibr">26</xref></sup> The aforementioned studies have seldom touched upon the temperature
+changes during the thermal runaway process of lithium-ion batteries
+caused by seasonal temperature variations. Moreover, the positioning
+of fine water mist fire extinguishing nozzles was often based on engineering
+practice experience, lacking systematic research.</p><p>In summary,
+this paper focuses on a lithium-ion battery energy
+storage facility, utilizing PyroSim software to establish a numerical
+simulation model for fire incidents. Initially, the study investigates
+the variation pattern of the thermal runaway temperature of lithium-ion
+batteries with different distances from the ignition source. It examined
+the cooling differences in the lithium-ion battery fire at the energy
+storage station caused by a fine water mist at various nozzle positions.
+Finally, the research explored the temperature control effects of
+fine water mist on lithium-ion battery fires at the energy storage
+station under different seasons and environmental temperatures (10,
+25, 35 °C). The findings of this study provided scientific guidance
+for the prevention and control of fires in lithium-ion battery energy
+storage compartments.</p></sec><sec id="sec2" disp-level="1"><label>2.</label><title>Theoretical Analysis</title><p>PyroSim software
+is primarily based on computational fluid dynamics
+theory, simulating the distribution of smoke flow when the research
+subject experiences a fire. It predicts the concentration distribution
+of toxic and harmful gases as well as the temperature distribution
+of smoke during a fire using measurement points. The required computational
+formulas are as follows.</p><p>Mass conservation equation.</p><disp-formula id="eq1"><label>1</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m001.jpg"><?cloudpmc-path blobs/25e2/11209695/78cf6627c9bb/ao4c00921_m001.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 30?><?original-width 96?><?scaled-height 30?><?scaled-width 96?></graphic></disp-formula><p>Momentum
+conservation
+equation.</p><disp-formula id="eq2"><label>2</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m002.jpg"><?cloudpmc-path blobs/25e2/11209695/23d0e20555c0/ao4c00921_m002.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 29?><?original-width 228?><?scaled-height 29?><?scaled-width 228?></graphic></disp-formula><p>Energy conservation
+equation.</p><disp-formula id="eq3"><label>3</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m003.jpg"><?cloudpmc-path blobs/25e2/11209695/0516053d6448/ao4c00921_m003.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 30?><?original-width 229?><?scaled-height 30?><?scaled-width 229?></graphic></disp-formula><p>Ideal gas equation.</p><disp-formula id="eq4"><label>4</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m004.jpg"><?cloudpmc-path blobs/25e2/11209695/1b66e024d913/ao4c00921_m004.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 29?><?original-width 50?><?scaled-height 29?><?scaled-width 50?></graphic></disp-formula></sec><sec id="sec3" disp-level="1"><label>3.</label><title>Numerical Model Development</title><sec id="sec3.1" disp-level="2"><label>3.1.</label><title>Model
+Creation</title><p>When simulating calculations
+using PyroSim, this paper selected an energy storage compartment with
+dimensions of 20 feet (length: 6.058 m, width: 2.438 m, height: 2.591
+m) as shown in <xref rid="fig2" ref-type="fig">Figure <xref rid="fig2" ref-type="fig">2</xref></xref>. The individual batteries chosen for this study were the brand Contemporary
+Amperex Technology Co. Limited (CATL), model CATL 280Ah, with dimensions
+of 173.9 × 207.2 × 71.7 mm. Other positions in the compartment
+were designated for distribution cabinets measuring 1.35 m in length,
+0.8 m in width, and 2.3 m in height. Before modeling with PyroSim,
+it was necessary to define a computational domain within PyroSim.
+After the number of computational domains was determined, the next
+step involved partitioning the grids. In numerical simulation studies,
+grid density forms the foundation of simulation calculations and the
+accuracy of the simulation is closely tied to the grid density. Finer
+grid densities typically yield more accurate computational results.
+In this study, the precision of the fire source characteristics is
+commonly represented by <italic>D</italic>*/δ<sub><italic>x</italic></sub>, where <italic>D</italic>* is the characteristic diameter
+of the fire source, and δ<sub><italic>x</italic></sub> is the
+grid size. The calculation formula for <italic>D</italic>* is given
+below.</p><disp-formula id="eq5"><label>5</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m005.jpg"><?cloudpmc-path blobs/25e2/11209695/bd1660efc2bb/ao4c00921_m005.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 44?><?original-width 110?><?scaled-height 44?><?scaled-width 110?></graphic></disp-formula><p><italic>Q</italic> represents
+the fire source power in kilowatts (kW); ρ<sub>0</sub> is the
+air density in kilograms per cubic meter kg/m<sup>3</sup>, commonly
+taken as 1.29 kg/m<sup>3</sup>; <italic>C</italic><sub>P</sub> is
+the specific heat capacity of air in kilojoules per kilogram per Kelvin
+kJ/(kg K), typically considered as 1.005 kJ/(kg K); <italic>g</italic> is the gravitational acceleration in meters per second squared (m/s<sup>2</sup>), usually assumed to be 9.8 m/s<sup>2</sup>; and <italic>T</italic><sub>0</sub> is the ambient temperature in Kelvin (K),
+taken as 303 K in this case. In this simulation, a comparison was
+made for grid sizes of 0.03 and 0.05. Following a foundational simulation,
+the model was modified and improved based on the errors indicated
+by FDS. Finally, the grid dimensions were set at 0.05 × 0.05
+× 0.05 m. The modified model was then subjected to simulation,
+and the grid construction is successfully completed.</p><fig id="fig2" position="float"><?disp-level 3?><label>Figure 2</label><caption><p>Lithium-ion battery energy
+storage compartment model.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr2" xlink:href="ao4c00921_0002.jpg"><?cloudpmc-path blobs/25e2/11209695/734f43229a2c/ao4c00921_0002.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 828?><?original-width 1637?><?scaled-height 331?><?scaled-width 654?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0002.gif"><?cloudpmc-path blobs/25e2/11209695/8c4461c9933b/ao4c00921_0002.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec3.2" disp-level="2"><label>3.2.</label><title>Fire Setting Scenario</title><p>In this section,
+the research focused on the thermal runaway of batteries leading to
+fires and the impact of fine water mist on fire incidents in a containerized
+lithium-ion battery energy storage compartment. Given the symmetrical
+arrangement of batteries in the battery compartment, fire sources
+were placed in different positions to simulate various scenarios and
+temperature variations in the system were observed through simulations.
+The individual battery model used is the CATL 280A, operating under
+direct current. The battery operated in a temperature range of 0–55
+°C under charging conditions and −30 to 55 °C under
+discharging conditions. Short-term storage was adaptable to temperatures
+ranging from −20 to 65 °C, and long-term storage was adaptable
+to temperatures from −20 to 55 °C. This study focuses
+on the temperature fluctuations within lithium-ion battery energy
+storage compartments across various seasons, as well as the temperature
+control efficacy of fine water mist in suppressing lithium-ion battery
+fires in energy storage stations. According to the data obtained from
+the local meteorological bureau in a central city of China, the average
+indoor temperature in winter is 6.8 °C, in spring and autumn
+it is 23.6 °C, and in summer it is 36.9 °C. Since the batteries
+in the lithium battery energy storage warehouse generate heat during
+operation, the temperature inside the warehouse will be higher than
+the room temperature. Therefore, we choose 10, 25, and 35 °C
+as the ambient temperatures for the working conditions. We established
+indoor temperature conditions of 10 °C for winter, 25 °C
+for spring and autumn, and 35 °C for summer. Therefore, environmental
+temperatures were set at 10, 25, and 35 °C, respectively. The
+fire suppression method chosen is the use of a fine water mist. As
+a fire occurs, the ambient temperature rapidly increases and stabilizes
+at a certain value. Therefore, activating the fine water mist system
+when the ambient temperature reached its maximum was crucial for effectively
+suppressing fires within containerized lithium-ion battery energy
+storage compartments.</p><p>The design steps include determining the
+positions of measurement points and slices, the location of the fire
+source, the location of water mist nozzle, the maximum heat release
+rate, and the environmental conditions. The location of the fire source
+was: <italic>X</italic> (0.469,0.6429) <italic>Y</italic> (1.7249,1.9321) <italic>Z</italic> (0.605,0.6767). The water mist sprayers were set above
+the center of the energy storage chamber, at the same height as the
+detector, to achieve a better fire suppression effect. Their locations
+were: (1.2, 1.22, 2.55), (2.4, 0.5, 2.55), and (3.4, 1.22, 2.55).
+To better reflect changes in fire sources at various stages, detection
+points for environmental temperatures needed to be set. Simultaneously,
+positions for temperature slices were required (See <xref rid="fig3" ref-type="fig">Figure <xref rid="fig3" ref-type="fig">3</xref></xref>), where the temperature slices
+including: <italic>X</italic> = 2.0 m Temperature; <italic>X</italic> = 4.0 m Temperature; <italic>Y</italic> = 0.5 m Temperature; <italic>Y</italic> = 1.5 m Temperature; <italic>Z</italic> = 1.0 m Temperature; <italic>Z</italic> = 2.0 m Temperature.</p><fig id="fig3" position="float"><?disp-level 3?><label>Figure 3</label><caption><p>Positions for the temperature slices.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr3" xlink:href="ao4c00921_0003.jpg"><?cloudpmc-path blobs/25e2/11209695/b5facafbbf79/ao4c00921_0003.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 677?><?original-width 1000?><?scaled-height 451?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0003.gif"><?cloudpmc-path blobs/25e2/11209695/2f66354cd78c/ao4c00921_0003.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig><p>Setting up a steady-state heat source, choosing
+to establish a
+heat source, and monitoring its temperature is crucial. To accurately
+detect the temperature around the heat source, multiple thermocouples
+were incorporated into the model during its construction. These thermocouples
+helped us observe temperature variations in the environment surrounding
+the heat source under different scenarios. The positions of six environmental
+temperature detection points were (0.2, 0.5, 2.55), (2.2, 0.5, 2.55),
+(2.2, 1.5, 2.55), (4.2, 0.5, 2.55), (4.2, 1.5, 2.55), (0.2, 1.5, 2.55),
+(1.2, 0.5, 2.25), and (1.2, 1.5, 2.25). The positions of the heat
+source and detection points in the model were illustrated in <xref rid="fig4" ref-type="fig">Figure <xref rid="fig4" ref-type="fig">4</xref></xref>.</p><fig id="fig4" position="float"><?disp-level 3?><label>Figure 4</label><caption><p>Positions of the heat
+source and detection points.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr4" xlink:href="ao4c00921_0004.jpg"><?cloudpmc-path blobs/25e2/11209695/c32a8664f196/ao4c00921_0004.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 770?><?original-width 1419?><?scaled-height 385?><?scaled-width 709?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0004.gif"><?cloudpmc-path blobs/25e2/11209695/da25f713a05c/ao4c00921_0004.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec3.3" disp-level="2"><label>3.3.</label><title>Fine Water Mist Nozzle Settings</title><p>The
+design flow rate of the nozzle is calculated using <xref rid="eq5" ref-type="disp-formula">eq <xref rid="eq5" ref-type="disp-formula">5</xref></xref>.</p><disp-formula id="eq6"><label>6</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m006.jpg"><?cloudpmc-path blobs/25e2/11209695/eea406615351/ao4c00921_m006.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 20?><?original-width 81?><?scaled-height 20?><?scaled-width 81?></graphic></disp-formula><p>The spray intensity
+of the nozzle should be calculated according to <xref rid="eq6" ref-type="disp-formula">eq <xref rid="eq6" ref-type="disp-formula">6</xref></xref>.</p><disp-formula id="eq7"><label>7</label><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" xlink:href="ao4c00921_m007.jpg"><?cloudpmc-path blobs/25e2/11209695/23491f80d26b/ao4c00921_m007.jpg?><?cloudpmc-bucket cdn?><?image-server-status NEVER_LOAD?><?original-height 30?><?original-width 44?><?scaled-height 30?><?scaled-width 44?></graphic></disp-formula><p>The model calculated
+the protection area of the system to be approximately
+68 m<sup>2</sup>, with the designed number of nozzles set at two.
+According to <xref rid="eq6" ref-type="disp-formula">eq <xref rid="eq6" ref-type="disp-formula">6</xref></xref>, the
+spray intensity of the nozzles was determined to be 15.89 L/min m<sup>2</sup>. The working status is shown in <xref rid="fig5" ref-type="fig">Figure <xref rid="fig5" ref-type="fig">5</xref></xref>.</p><fig id="fig5" position="float"><?disp-level 3?><label>Figure 5</label><caption><p>Schematic diagram of fine water mist.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr5" xlink:href="ao4c00921_0005.jpg"><?cloudpmc-path blobs/25e2/11209695/8b2ef12b7138/ao4c00921_0005.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 800?><?original-width 1327?><?scaled-height 400?><?scaled-width 663?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0005.gif"><?cloudpmc-path blobs/25e2/11209695/20f8c2f97350/ao4c00921_0005.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec3.4" disp-level="2"><label>3.4.</label><title>Scenario Configuration</title><p>During the
+simulation process, a total of four fire scenarios were established
+to investigate the temperature control effect of the fine water mist
+system on the lithium-ion battery energy storage compartment. The
+first scenario was set at room temperature (25 °C) to monitor
+the temperature when fires occurred at different locations. The main
+distinction among the three remaining scenarios lies in the varying
+ambient temperatures. All four scenarios incorporated a fine water
+mist system for comparative analysis. The specific scenario configurations
+were outlined in <xref rid="tbl1" ref-type="table">Table <xref rid="tbl1" ref-type="table">1</xref></xref>.</p><table-wrap id="tbl1" position="float"><?disp-level 3?><label>Table 1</label><caption><title>Setting of Fire Scenarios</title></caption><table frame="hsides" rules="groups" border="0"><colgroup span="1"><col align="left" span="1"/><col align="left" span="1"/><col align="left" span="1"/></colgroup><thead><tr><th style="border:none;" align="center" colspan="1" rowspan="1">fire scenarios</th><th style="border:none;" align="center" colspan="1" rowspan="1">scenario
+number</th><th style="border:none;" align="center" colspan="1" rowspan="1">specific
+scenario</th></tr></thead><tbody><tr><td style="border:none;" align="left" colspan="1" rowspan="1">scenario 1 – at room
+temperature</td><td style="border:none;" align="left" colspan="1" rowspan="1">1</td><td style="border:none;" align="left" colspan="1" rowspan="1">different monitoring positions</td></tr><tr><td rowspan="2" style="border:none;" align="left" colspan="1">scenario
+2
+– ambient temperature of 10 °C</td><td style="border:none;" align="left" colspan="1" rowspan="1">2.1</td><td style="border:none;" align="left" colspan="1" rowspan="1">lack of fine water mist</td></tr><tr><td style="border:none;" align="left" colspan="1" rowspan="1">2.2</td><td style="border:none;" align="left" colspan="1" rowspan="1">set up a fine water mist</td></tr><tr><td rowspan="2" style="border:none;" align="left" colspan="1">scenario 3
+– ambient temperature of 25 °C</td><td style="border:none;" align="left" colspan="1" rowspan="1">3.1</td><td style="border:none;" align="left" colspan="1" rowspan="1">lack of fine water mist</td></tr><tr><td style="border:none;" align="left" colspan="1" rowspan="1">3.2</td><td style="border:none;" align="left" colspan="1" rowspan="1">set up a fine water mist</td></tr><tr><td rowspan="2" style="border:none;" align="left" colspan="1">scenario 4
+– ambient temperature of 35 °C</td><td style="border:none;" align="left" colspan="1" rowspan="1">4.1</td><td style="border:none;" align="left" colspan="1" rowspan="1">lack of fine water mist</td></tr><tr><td style="border:none;" align="left" colspan="1" rowspan="1">4.2</td><td style="border:none;" align="left" colspan="1" rowspan="1">set up a fine water mist</td></tr></tbody></table></table-wrap></sec></sec><sec id="sec4" disp-level="1"><label>4.</label><title>Results and Discussion</title><sec id="sec4.1" disp-level="2"><label>4.1.</label><title>Temperature Variation Patterns at Different
+Distances from the Heat Source</title><p>At room temperature, an analysis
+was conducted of the temperature variation over time at different
+monitoring points in the lithium-ion battery energy storage compartment
+during a fire. The comparison of temperature variations and numerical
+values involved the following steps to select optimal observation
+points. Additionally, a fine water mist system was configured for
+comparative purposes as follows.</p><p>As shown in <xref rid="fig6" ref-type="fig">Figure <xref rid="fig6" ref-type="fig">6</xref></xref>, during a fire incident, the
+ambient temperature rapidly increased, reaching its peak after a certain
+period, and gradually stabilized. The temperature increased significantly
+at a location closer to the fire source (Detection Point 6#), reaching
+a maximum temperature of 340 °C; the maximum temperatures at
+Detection Point 1# and 8# reached 284 and 240 °C, respectively.
+As the distance from the fire source increases, the rate of temperature
+increases and the maximum ambient temperature decreases, with the
+highest temperature values measured at 2#, 3#, 4#, 5# and 7# which
+were far from the fire source, were all no higher than 150 °C.</p><fig id="fig6" position="float"><?disp-level 3?><label>Figure 6</label><caption><p>Temperature
+changes without the fine water mist system at room
+temperature.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr6" xlink:href="ao4c00921_0006.jpg"><?cloudpmc-path blobs/25e2/11209695/d4d249facb29/ao4c00921_0006.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 788?><?original-width 1000?><?scaled-height 525?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0006.gif"><?cloudpmc-path blobs/25e2/11209695/dacd1f306620/ao4c00921_0006.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig><p>Examining the temperature variations
+at different
+positions from
+the fire source is depicted in <xref rid="fig7" ref-type="fig">Figure <xref rid="fig7" ref-type="fig">7</xref></xref>. Prior to activating the fine water mist system, temperatures
+experienced a rapid ascent across all locations. Once the ambient
+temperature reached its peak, the fine water mist system came into
+operation. With the cooling effect of the fine water mist, temperatures
+at various positions within the system commenced a descent. The rate
+of temperature decrease varies across different locations, the temperatures
+at 6# experiencing a more rapid decline, dropping to 210 °C within
+400 s, while the temperatures at Points 1# and 8# decreased to 195
+and 133 °C, respectively. In contrast, temperatures at Detection
+Points 2#, 3#, 4#, 5# and 7#, farther from the fire source, gradually
+decreased below 60 °C and eventually returned to room temperature
+after the fine water mist system was engaged.</p><fig id="fig7" position="float"><?disp-level 3?><label>Figure 7</label><caption><p>Temperature changes with
+a fine water mist system at room temperature.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr7" xlink:href="ao4c00921_0007.jpg"><?cloudpmc-path blobs/25e2/11209695/f37ded8f6744/ao4c00921_0007.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 785?><?original-width 1000?><?scaled-height 523?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0007.gif"><?cloudpmc-path blobs/25e2/11209695/9c93c6ad9a49/ao4c00921_0007.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig><p>By comparing <xref rid="fig6" ref-type="fig">Figures <xref rid="fig6" ref-type="fig">6</xref></xref> and <xref rid="fig7" ref-type="fig">7</xref>, it was evident
+that the temperature
+variation was more pronounced at location 6#, and the temperature
+change at locations farther from the fire source was minimal after
+the fine water mist system was activated. To ensure comparability
+with the experimental group, subsequent data analysis would focus
+on the results obtained from 6#.</p></sec><sec id="sec4.2" disp-level="2"><label>4.2.</label><title>Simulation
+Results Analysis at 10 °C</title><p>Under the conditions of 10
+°C ambient temperature, an analysis
+was conducted on the development of flames and the temperature variation
+over time during a fire in the lithium-ion battery energy storage
+compartment. Additionally, the impact of the fine water mist system
+on flames and temperature was examined after its activation. As shown
+in <xref rid="fig8" ref-type="fig">Figure <xref rid="fig8" ref-type="fig">8</xref></xref>, compared
+to the size of flames before the initiation of the fine water mist
+system, the flames were significantly reduced after the system had
+been operational for some time. At 400 s, the flame size with the
+fine water mist system in place was notably smaller than the flame
+without the mist system. The temperature curve was extracted from
+position 6#. After the occurrence of the fire, the ambient temperature
+rapidly increased and reached its peak at 260 s (310 °C). At
+this point, the fine water mist system started operating, exerting
+a suppressive effect on the fire, leading to a rapid decrease in ambient
+temperature. After 100 s of the fine water mist system operation,
+the ambient temperature gradually stabilized at 200 °C, significantly
+lower than the temperature without the fine water mist system.</p><fig id="fig8" position="float"><?disp-level 3?><label>Figure 8</label><caption><p>Temperature
+variation over time at an environmental temperature
+of 10 °C.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr8" xlink:href="ao4c00921_0008.jpg"><?cloudpmc-path blobs/25e2/11209695/9255b67e4d3b/ao4c00921_0008.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 786?><?original-width 1000?><?scaled-height 523?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0008.gif"><?cloudpmc-path blobs/25e2/11209695/a46d51b782a9/ao4c00921_0008.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec4.3" disp-level="2"><label>4.3.</label><title>Simulation
+Results Analysis at 25 °C</title><p>Under the conditions of 25
+°C ambient temperature, an analysis
+was conducted on the development of flames and the temperature variation
+over time during a fire in the lithium-ion battery energy storage
+compartment. Additionally, the impact of the fine water mist system
+on flames and temperature was examined after its activation. As shown
+in <xref rid="fig9" ref-type="fig">Figure <xref rid="fig9" ref-type="fig">9</xref></xref>, the changes
+in flames after the fine water mist system had been operational were
+similar to the conditions in scenario 2. The temperature curve was
+extracted from position 6#. After the occurrence of the fire, the
+ambient temperature rapidly increased and reached its peak at 250
+s (330 °C). At this point, the fine water mist system started
+operating, exerting a suppressive effect on the fire, leading to a
+rapid decrease in ambient temperature. After 100 s of the fine water
+mist system operation, the ambient temperature gradually stabilized
+at around 210 °C, significantly lower than the temperature without
+the fine water mist system.</p><fig id="fig9" position="float"><?disp-level 3?><label>Figure 9</label><caption><p>Temperature variation over time at an environmental
+temperature
+of 25 °C.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr9" xlink:href="ao4c00921_0009.jpg"><?cloudpmc-path blobs/25e2/11209695/400c3527152a/ao4c00921_0009.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 785?><?original-width 1000?><?scaled-height 523?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0009.gif"><?cloudpmc-path blobs/25e2/11209695/15c27ed4610b/ao4c00921_0009.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec4.4" disp-level="2"><label>4.4.</label><title>Simulation
+Results Analysis at 35 °C</title><p>Under the conditions of 35
+°C ambient temperature, an analysis
+was conducted on the development of flames and the temperature variation
+over time during a fire in the lithium-ion battery energy storage
+compartment. Additionally, the impact of the fine water mist system
+on flames and temperature was examined after its activation. As shown
+in <xref rid="fig10" ref-type="fig">Figure <xref rid="fig10" ref-type="fig">10</xref></xref>, the
+changes in flames after the fine water mist system had been operational
+were similar to the conditions in scenarios 2 and 3. The temperature
+curve was extracted from position 6#. After the occurrence of the
+fire, the ambient temperature rapidly increased and reached its peak
+at 240 s (340 °C). At this point, the fine water mist system
+started operating, exerting a suppressive effect on the fire, leading
+to a rapid decrease in ambient temperature. After 100 s of the fine
+water mist system operation, the ambient temperature gradually stabilized
+at around 225 °C, significantly lower than the temperature without
+the fine water mist system.</p><fig id="fig10" position="float"><?disp-level 3?><label>Figure 10</label><caption><p>Temperature variation over time at an environmental
+temperature
+of 35 °C.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr10" xlink:href="ao4c00921_0010.jpg"><?cloudpmc-path blobs/25e2/11209695/2a0b06f04933/ao4c00921_0010.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 777?><?original-width 1000?><?scaled-height 517?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0010.gif"><?cloudpmc-path blobs/25e2/11209695/226d9119b61b/ao4c00921_0010.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec4.5" disp-level="2"><label>4.5.</label><title>Maximum
+Temperature under Different Conditions</title><p>Based on <xref rid="fig8" ref-type="fig">Figures <xref rid="fig8" ref-type="fig">8</xref></xref>–<xref rid="fig10" ref-type="fig">10</xref>, a comparison revealed the following
+insights regarding the maximum temperature reached and the flame height
+and width at 400 s: In scenarios without the fine water mist system,
+flames were larger when the initial ambient temperature is higher.
+Conversely, in scenarios with the fine water mist system, flames significantly
+decreased after the mist system was activated, indicating a substantial
+impact of the fine water mist system on the flame size. Comparing
+the time and numerical values for reaching the maximum temperature,
+in scenarios without the fine water mist system, a higher initial
+ambient temperature led to an earlier and higher peak temperature.
+In scenarios with the fine water mist system, the mist system was
+activated earlier due to the earlier peak ambient temperature.</p><p>As shown in <xref rid="fig11" ref-type="fig">Figure <xref rid="fig11" ref-type="fig">11</xref></xref>, during the 400s of combustion, as the fine water mist system operated
+for a period, the ambient temperature tends to stabilize. At the same
+ambient temperature, the maximum temperature reached in the environment
+without the fine water mist system was much higher than the stabilized
+temperature achieved with the mist system activated. With an increase
+in the initial ambient temperature, the maximum temperature without
+the fine water mist system rises and the stabilized ambient temperature
+after the mist system operates also increased correspondingly. In
+other words, a higher initial ambient temperature corresponded to
+a higher maximum temperature after a fire and a higher stabilized
+ambient temperature.</p><fig id="fig11" position="float"><?disp-level 3?><label>Figure 11</label><caption><p>System environment approaches a stable value under different
+conditions.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr11" xlink:href="ao4c00921_0011.jpg"><?cloudpmc-path blobs/25e2/11209695/9f9ddf13079c/ao4c00921_0011.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 764?><?original-width 1000?><?scaled-height 509?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0011.gif"><?cloudpmc-path blobs/25e2/11209695/c51aaa36b651/ao4c00921_0011.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec><sec id="sec4.6" disp-level="2"><label>4.6.</label><title>Variation
+of Heat Release Rate under Different
+Temperature Conditions</title><p>The heat release rate is the amount
+of heat released per unit of time under certain conditions during
+the combustion of a material. It is a crucial parameter reflecting
+the degree of fire hazard, and its numerical value indirectly determines
+the amount of smoke and the production of toxic substances during
+material combustion. In the PyroSim simulation, the heat release rate
+is a fundamental input parameter. In this study, the heat release
+rate per unit area was set at 3000 kW/m<sup>2</sup>, with the reaction
+material specified as “Burner”. The simulation focused
+on the scenario of a lithium-ion battery energy storage facility catching
+fire, and thus, the investigation into the heat release rate examined
+the influence of different temperatures under a fire heat release
+rate of 3000 kW/m<sup>2</sup>.</p><p><xref rid="fig12" ref-type="fig">Figure <xref rid="fig12" ref-type="fig">12</xref></xref> illustrates the trend in the variation
+of heat release rates, showing a generally consistent pattern among
+the three scenarios. The rates initially exhibited a gradual increase,
+followed by a sharp rise, with continuous fluctuations during the
+ascent. The times and corresponding values when the maximum heat release
+rates were reached under different ambient temperatures (10, 25, and
+35 °C) are as follows: (266 s, 450 kW); (245 s, 449 kW); (222
+s, 451 kW). It could be concluded that the maximum heat release rates
+under different ambient temperatures were comparable, but at higher
+ambient temperatures, the system reached the maximum heat release
+rate earlier.</p><fig id="fig12" position="float"><?disp-level 3?><label>Figure 12</label><caption><p>Time dependent heat release rate curves at different temperatures.</p></caption><alternatives><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="image" id="gr12" xlink:href="ao4c00921_0012.jpg"><?cloudpmc-path blobs/25e2/11209695/7891043a0de2/ao4c00921_0012.jpg?><?cloudpmc-bucket cdn?><?image-server-status LOAD_COMPLETED?><?original-height 833?><?original-width 1333?><?scaled-height 416?><?scaled-width 666?></graphic><graphic xmlns:xlink="http://www.w3.org/1999/xlink" content-type="thumb" xlink:href="ao4c00921_0012.gif"><?cloudpmc-path blobs/25e2/11209695/5e6daade9196/ao4c00921_0012.gif?><?cloudpmc-bucket cdn?></graphic></alternatives></fig></sec></sec><sec id="sec5" disp-level="1"><label>5.</label><title>Conclusions</title><list list-type="label"><list-item><label>1.</label><p>At the same ambient
+temperature, the
+flame size when the fine water mist system is activated is significantly
+smaller than the flame size when the mist system is not equipped.
+During a fire, the system temperature rises rapidly and stabilizes
+once it reaches a certain level. When the fine water mist system cools
+the environment above the flame, it tends to stabilize at a temperature
+significantly lower than the highest temperature reached without the
+mist system.</p></list-item><list-item><label>2.</label><p>At different
+ambient temperatures,
+the flame size of the system with or without the fine water mist increases
+as the ambient temperature rises. The system reaches its maximum temperature
+earlier as the ambient temperature increases. With increasing ambient
+temperature, the maximum temperature reached by the system without
+the fine water mist also increases, and when the mist system is activated,
+the temperature at which it stabilizes also increases correspondingly.</p></list-item><list-item><label>3.</label><p>The variation trend of
+heat release
+rate remains consistent across different ambient temperatures, with
+comparable maximum values of heat release rate. However, the time
+at which the maximum heat release rate is reached varies depending
+on the ambient temperature, with systems at higher ambient temperatures
+reaching the maximum heat release rate more quickly.</p></list-item></list></sec><sec id="ack1" sec-type="ack" disp-level="1"><title>Acknowledgments</title><p>This research is financially
+supported by Henan
+Province Key R&amp;D Special Project (Grant No. 231111322200), Zhengzhou
+University of Light Industry Science and Technology Innovation Team
+Support Program Project (Grant No. 23XNKJTD0305), Henan Province Science
+and Technology Research Plan Project (Grant Nos.: 232102321094; 232102320232;
+242102321033; 242102321104), Xingyang City Innovation and Entrepreneurship
+Team (Grant No. 2021XIET004), Ph.D. Research Fund of Zhengzhou University
+of Light Industry (Grant No. 2022BSJJZK24) and Zhengzhou City Collaborative
+Innovation Special Project (Cultivation of Major Projects) (Grant
+No.: 2021ZDPY0108).</p></sec><sec id="dl1" sec-type="glossary" disp-level="1"><title>Glossary</title><def-list><title>Nomenclature</title><def-item><term>F</term><def><p>force (N)</p></def></def-item><def-item><term>G</term><def><p>gravitational acceleration
+(m/s<sup>2</sup>)</p></def></def-item><def-item><term>H</term><def><p>enthalpy (J/kg)</p></def></def-item><def-item><term>K</term><def><p>nozzle flow rate coefficient (L/min/(MPa)<sup>1/2</sup>)</p></def></def-item><def-item><term>N</term><def><p>number of nozzles</p></def></def-item><def-item><term>p<sub>1</sub></term><def><p>nozzle operating
+pressure
+(Pa)</p></def></def-item><def-item><term>P</term><def><p>pressure
+(N)</p></def></def-item><def-item><term>q</term><def><p>nozzle flow
+rate (L/min)</p></def></def-item><def-item><term>R</term><def><p>ideal
+gas constant (J/(mol K))</p></def></def-item><def-item><term>S</term><def><p>the protection area of the nozzle
+(m<sup>2</sup>)</p></def></def-item><def-item><term>t</term><def><p>simulation time (s)</p></def></def-item><def-item><term>w</term><def><p>nozzle spray intensity (L/min m<sup>2</sup>)</p></def></def-item><def-item><term>W</term><def><p>gas mixture molecular weight (kg/mol)</p></def></def-item><def-item><term>ρ</term><def><p>gas density
+(kg/m<sup>3</sup>)</p></def></def-item><def-item><term>μ</term><def><p>velocity (m/s)</p></def></def-item><def-item><term>∇
+· τ<sub><italic>i</italic></sub></term><def><p>Newtonian
+fluid viscous stress tension (N)</p></def></def-item><def-item><term><italic>q̇</italic><sup>‴</sup></term><def><p>heat release
+rate per unit volume (J/s)</p></def></def-item><def-item><term><italic>q̇</italic><sup>″</sup></term><def><p>heat flux (W/m<sup>2</sup>)</p></def></def-item><def-item><term>Φ</term><def><p>dissipation function</p></def></def-item></def-list></sec><sec id="notes1" disp-level="1"><p>The authors
+declare no competing financial interest.</p></sec><sec id="ref-list1" sec-type="ref-list" disp-level="1"><title>References</title><sec id="ref-list1_sec2" disp-level="2"><ref-list><ref id="ref1"><mixed-citation id="cit1"><named-content content-type="citation-string">Shouding L. I.; Yan L. I.; Jie T.; et al. Current status and emerging
+trends in the safety of Li-ion battery energy storage for power grid
+applications. Energy Storage Sci. Technol.
+2020, 9 (5), 1505. 10.19799/j.cnki.2095-4239.2020.0111.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.19799/j.cnki.2095-4239.2020.0111"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Energy Storage Sci. Technol.&amp;title=Current status and emerging trends in the safety of Li-ion battery energy storage for power grid applications&amp;author=L. I. Shouding&amp;author=L. I. Yan&amp;author=T. Jie&amp;volume=9&amp;issue=5&amp;publication_year=2020&amp;pages=1505&amp;doi=10.19799/j.cnki.2095-4239.2020.0111&amp;"/></mixed-citation></ref><ref id="ref2"><mixed-citation id="cit2"><named-content content-type="citation-string">Winter M.; Barnett B.; Xu K.
+Before Li
+ion batteries. Chem. Rev.
+2018, 118 (23), 11433–11456. 10.1021/acs.chemrev.8b00422.
+</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1021/acs.chemrev.8b00422"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="pmid" xlink:href="30500179"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Chem. Rev.&amp;title=Before Li ion batteries&amp;author=M. Winter&amp;author=B. Barnett&amp;author=K. Xu&amp;volume=118&amp;issue=23&amp;publication_year=2018&amp;pages=11433-11456&amp;pmid=30500179&amp;doi=10.1021/acs.chemrev.8b00422&amp;"/></mixed-citation></ref><ref id="ref3"><mixed-citation id="cit3"><named-content content-type="citation-string">Lisbona D.; Snee T.
+A review of hazards
+associated with primary lithium and lithium-ion
+batteries. Process safety and environmental
+protection
+2011, 89 (6), 434–442. 10.1016/j.psep.2011.06.022.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.psep.2011.06.022"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Process safety and environmental protection&amp;title=A review of hazards associated with primary lithium and lithium-ion batteries&amp;author=D. Lisbona&amp;author=T. Snee&amp;volume=89&amp;issue=6&amp;publication_year=2011&amp;pages=434-442&amp;doi=10.1016/j.psep.2011.06.022&amp;"/></mixed-citation></ref><ref id="ref4"><mixed-citation id="cit4"><named-content content-type="citation-string">Lou Z.; Wang K.; Kang M.; et al. Plugging methods for
+underground gas extraction boreholes in coal seams: A review of processes,
+challenges and strategies. Gas Science and Engineering
+2024, 122, 205225 10.1016/j.jgsce.2024.205225.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.jgsce.2024.205225"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Gas Science and Engineering&amp;title=Plugging methods for underground gas extraction boreholes in coal seams: A review of processes, challenges and strategies&amp;author=Z. Lou&amp;author=K. Wang&amp;author=M. Kang&amp;volume=122&amp;publication_year=2024&amp;pages=205225&amp;doi=10.1016/j.jgsce.2024.205225&amp;"/></mixed-citation></ref><ref id="ref5"><mixed-citation id="cit5"><named-content content-type="citation-string">Viskanta R.; Mengüç M. P.
+Radiation
+heat transfer in combustion
+systems. Prog. Energy Combust. Sci.
+1987, 13 (2), 97–160. 10.1016/0360-1285(87)90008-6.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/0360-1285(87)90008-6"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Prog. Energy Combust. Sci.&amp;title=Radiation heat transfer in combustion systems&amp;author=R. Viskanta&amp;author=M. P. Mengüç&amp;volume=13&amp;issue=2&amp;publication_year=1987&amp;pages=97-160&amp;doi=10.1016/0360-1285(87)90008-6&amp;"/></mixed-citation></ref><ref id="ref6"><mixed-citation id="cit6"><named-content content-type="citation-string">Parker W. J.; Filipczak R.. Modeling the heat release
+rate of aircraft cabin panels; Federal Aviation
+Administration Technical Center: 1993.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="title=Modeling the heat release rate of aircraft cabin panels&amp;publication_year=1993&amp;"/></mixed-citation></ref><ref id="ref7"><mixed-citation id="cit7"><named-content content-type="citation-string">Cox G.
+Turbulent
+closure and the modelling of fire by using computational fluid dynamics. Mathematical, Physical and Engineering Sciences
+1998, 356 (1748), 2835–2854. 10.1098/rsta.1998.0300.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1098/rsta.1998.0300"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Mathematical, Physical and Engineering Sciences&amp;title=Turbulent closure and the modelling of fire by using computational fluid dynamics&amp;author=G. Cox&amp;volume=356&amp;issue=1748&amp;publication_year=1998&amp;pages=2835-2854&amp;doi=10.1098/rsta.1998.0300&amp;"/></mixed-citation></ref><ref id="ref8"><mixed-citation id="cit8"><named-content content-type="citation-string">Lewis M. J.; Moss M. B.; Rubini P. A.. CFD modelling
+of combustion and heat transfer in compartment fires. In Fire Safety Science Proceeding of 5th International
+Symposium; 1997.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="title=Fire Safety Science Proceeding of 5th International Symposium&amp;publication_year=1997&amp;"/></mixed-citation></ref><ref id="ref9"><mixed-citation id="cit9"><named-content content-type="citation-string">Chen M.; Zhou D.; Chen X.; et al. Investigation on the
+thermal hazards of 18650 lithium ion batteries by fire calorimeter. J. Therm. Anal. Calorim.
+2015, 122, 755–763. 10.1007/s10973-015-4751-5.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1007/s10973-015-4751-5"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=J. Therm. Anal. Calorim.&amp;title=Investigation on the thermal hazards of 18650 lithium ion batteries by fire calorimeter&amp;author=M. Chen&amp;author=D. Zhou&amp;author=X. Chen&amp;volume=122&amp;publication_year=2015&amp;pages=755-763&amp;doi=10.1007/s10973-015-4751-5&amp;"/></mixed-citation></ref><ref id="ref10"><mixed-citation id="cit10"><named-content content-type="citation-string">Chen M.; He Y.; De Zhou C.; et al. Experimental study on the combustion characteristics
+of primary lithium batteries fire. Fire Technol.
+2016, 52, 365–385. 10.1007/s10694-014-0450-1.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1007/s10694-014-0450-1"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Fire Technol.&amp;title=Experimental study on the combustion characteristics of primary lithium batteries fire&amp;author=M. Chen&amp;author=Y. He&amp;author=C. De Zhou&amp;volume=52&amp;publication_year=2016&amp;pages=365-385&amp;doi=10.1007/s10694-014-0450-1&amp;"/></mixed-citation></ref><ref id="ref11"><mixed-citation id="cit11"><named-content content-type="citation-string">Chen M.; Yuen R.; Wang J.
+An experimental
+study about the effect
+of arrangement on the fire behaviors of lithium-ion batteries. J. Therm. Anal. Calorim.
+2017, 129, 181–188. 10.1007/s10973-017-6158-y.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1007/s10973-017-6158-y"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=J. Therm. Anal. Calorim.&amp;title=An experimental study about the effect of arrangement on the fire behaviors of lithium-ion batteries&amp;author=M. Chen&amp;author=R. Yuen&amp;author=J. Wang&amp;volume=129&amp;publication_year=2017&amp;pages=181-188&amp;doi=10.1007/s10973-017-6158-y&amp;"/></mixed-citation></ref><ref id="ref12"><mixed-citation id="cit12"><named-content content-type="citation-string">Sarkos C.Improvements in
+aircraft fire safety derived from FAA research over the last decade; 2011.</named-content></mixed-citation></ref><ref id="ref13"><mixed-citation id="cit13"><named-content content-type="citation-string">Sato N.
+Thermal behavior
+analysis of lithium-ion batteries for electric and hybrid vehicles. J. Power Sources
+2001, 99 (1–2), 70–77. 10.1016/S0378-7753(01)00478-5.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/S0378-7753(01)00478-5"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=J. Power Sources&amp;title=Thermal behavior analysis of lithium-ion batteries for electric and hybrid vehicles&amp;author=N. Sato&amp;volume=99&amp;issue=1–2&amp;publication_year=2001&amp;pages=70-77&amp;doi=10.1016/S0378-7753(01)00478-5&amp;"/></mixed-citation></ref><ref id="ref14"><mixed-citation id="cit14"><named-content content-type="citation-string">Hesse H. C.; Schimpe M.; Kucevic D.; et al. Lithium-ion battery
+storage for the grid—A review of stationary battery storage
+system design tailored for applications in modern power grids. Energies
+2017, 10 (12), 2107. 10.3390/en10122107.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.3390/en10122107"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Energies&amp;title=Lithium-ion battery storage for the grid—A review of stationary battery storage system design tailored for applications in modern power grids&amp;author=H. C. Hesse&amp;author=M. Schimpe&amp;author=D. Kucevic&amp;volume=10&amp;issue=12&amp;publication_year=2017&amp;pages=2107&amp;doi=10.3390/en10122107&amp;"/></mixed-citation></ref><ref id="ref15"><mixed-citation id="cit15"><named-content content-type="citation-string">Darcovich K.; et al. Residential electrical power storage scenario simulations with a
+large-scale lithium ion battery. Journal of
+applied electrochemistry
+2010, 40 (4), 749–755. 10.1007/s10800-009-0053-6.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1007/s10800-009-0053-6"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Journal of applied electrochemistry&amp;title=Residential electrical power storage scenario simulations with a large-scale lithium ion battery&amp;author=K. Darcovich&amp;volume=40&amp;issue=4&amp;publication_year=2010&amp;pages=749-755&amp;doi=10.1007/s10800-009-0053-6&amp;"/></mixed-citation></ref><ref id="ref16"><mixed-citation id="cit16"><named-content content-type="citation-string">Chirkov Yu G.; et al. Computer Simulation
+of the Structure and Operation Mechanisms for
+the Active Layer of Lithium–Oxygen Battery Cathode. Russian Journal of Electrochemistry
+2020, 56, 230–238. 10.1134/S1023193520030027.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1134/S1023193520030027"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Russian Journal of Electrochemistry&amp;title=Computer Simulation of the Structure and Operation Mechanisms for the Active Layer of Lithium–Oxygen Battery Cathode&amp;author=Yu G. Chirkov&amp;volume=56&amp;publication_year=2020&amp;pages=230-238&amp;doi=10.1134/S1023193520030027&amp;"/></mixed-citation></ref><ref id="ref17"><mixed-citation id="cit17"><named-content content-type="citation-string">Wang Q.; Ping P.; Zhao X.; et al. Thermal runaway caused
+fire and explosion of lithium-ion battery. J.
+Power Sources
+2012, 208, 210–224. 10.1016/j.jpowsour.2012.02.038.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.jpowsour.2012.02.038"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=J. Power Sources&amp;title=Thermal runaway caused fire and explosion of lithium-ion battery&amp;author=Q. Wang&amp;author=P. Ping&amp;author=X. Zhao&amp;volume=208&amp;publication_year=2012&amp;pages=210-224&amp;doi=10.1016/j.jpowsour.2012.02.038&amp;"/></mixed-citation></ref><ref id="ref18"><mixed-citation id="cit18"><named-content content-type="citation-string">Wang Q.; Mao B.; Stoliarov S. I.; et al. A review of lithium-ion battery failure
+mechanisms and fire prevention strategies. Prog.
+Energy Combust. Sci.
+2019, 73, 95–131. 10.1016/j.pecs.2019.03.002.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.pecs.2019.03.002"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Prog. Energy Combust. Sci.&amp;title=A review of lithium-ion battery failure mechanisms and fire prevention strategies&amp;author=Q. Wang&amp;author=B. Mao&amp;author=S. I. Stoliarov&amp;volume=73&amp;publication_year=2019&amp;pages=95-131&amp;doi=10.1016/j.pecs.2019.03.002&amp;"/></mixed-citation></ref><ref id="ref19"><mixed-citation id="cit19"><named-content content-type="citation-string">Zhang C.; Sun H.; Zhang Y.; et al. Fire Accident
+Risk Analysis of Lithium Battery
+Energy Storage Systems during Maritime Transportation. Sustainability
+2023, 15 (19), 14198. 10.3390/su151914198.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.3390/su151914198"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Sustainability&amp;title=Fire Accident Risk Analysis of Lithium Battery Energy Storage Systems during Maritime Transportation&amp;author=C. Zhang&amp;author=H. Sun&amp;author=Y. Zhang&amp;volume=15&amp;issue=19&amp;publication_year=2023&amp;pages=14198&amp;doi=10.3390/su151914198&amp;"/></mixed-citation></ref><ref id="ref20"><mixed-citation id="cit20"><named-content content-type="citation-string">Liu H.; Han T.; Hao S.; et al. Internal short circuit fault diagnosis based
+on 1DVCNN in lithium battery storage system. Energy Reports
+2023, 9, 1470–1479. 10.1016/j.egyr.2023.04.148.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.egyr.2023.04.148"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Energy Reports&amp;title=Internal short circuit fault diagnosis based on 1DVCNN in lithium battery storage system&amp;author=H. Liu&amp;author=T. Han&amp;author=S. Hao&amp;volume=9&amp;publication_year=2023&amp;pages=1470-1479&amp;doi=10.1016/j.egyr.2023.04.148&amp;"/></mixed-citation></ref><ref id="ref21"><mixed-citation id="cit21"><named-content content-type="citation-string">Si J.; Tang Y.; Li X.; et al. Comprehensive Reliability
+Assessment Method for Lithium Battery Energy Storage Systems. Conference Series. IOP Publishing
+2023, 2474 (1), 012009 10.1088/1742-6596/2474/1/012009.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1088/1742-6596/2474/1/012009"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Conference Series. IOP Publishing&amp;title=Comprehensive Reliability Assessment Method for Lithium Battery Energy Storage Systems&amp;author=J. Si&amp;author=Y. Tang&amp;author=X. Li&amp;volume=2474&amp;issue=1&amp;publication_year=2023&amp;pages=012009&amp;doi=10.1088/1742-6596/2474/1/012009&amp;"/></mixed-citation></ref><ref id="ref22"><mixed-citation id="cit22"><named-content content-type="citation-string">Xu Q.; Zhang L.; Sun Y.; et al. Evaluation Model and
+Analysis of Lithium Battery Energy Storage Power Stations on Generation
+Side. IOP Conf. Ser.: Earth Environ. Sci.
+2019, 300 (4), 042005 10.1088/1755-1315/300/4/042005.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1088/1755-1315/300/4/042005"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=IOP Conf. Ser.: Earth Environ. Sci.&amp;title=Evaluation Model and Analysis of Lithium Battery Energy Storage Power Stations on Generation Side&amp;author=Q. Xu&amp;author=L. Zhang&amp;author=Y. Sun&amp;volume=300&amp;issue=4&amp;publication_year=2019&amp;pages=042005&amp;doi=10.1088/1755-1315/300/4/042005&amp;"/></mixed-citation></ref><ref id="ref23"><mixed-citation id="cit23"><named-content content-type="citation-string">Qin Y.; Zhao Z.; Miao S.; et al. Explosion hazards study
+of grid-scale lithium-ion battery energy storage station. J. Energy Storage
+2021, 42, 102987 10.1016/j.est.2021.102987.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.est.2021.102987"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=J. Energy Storage&amp;title=Explosion hazards study of grid-scale lithium-ion battery energy storage station&amp;author=Y. Qin&amp;author=Z. Zhao&amp;author=S. Miao&amp;volume=42&amp;publication_year=2021&amp;pages=102987&amp;doi=10.1016/j.est.2021.102987&amp;"/></mixed-citation></ref><ref id="ref24"><mixed-citation id="cit24"><named-content content-type="citation-string">Sun H.; Zhang L.; Duan Q.; et al. Experimental study on
+suppressing thermal runaway propagation of lithium-ion batteries in
+confined space by various fire extinguishing agents. Process Safety and Environmental Protection
+2022, 167, 299–307. 10.1016/j.psep.2022.09.016.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.psep.2022.09.016"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Process Safety and Environmental Protection&amp;title=Experimental study on suppressing thermal runaway propagation of lithium-ion batteries in confined space by various fire extinguishing agents&amp;author=H. Sun&amp;author=L. Zhang&amp;author=Q. Duan&amp;volume=167&amp;publication_year=2022&amp;pages=299-307&amp;doi=10.1016/j.psep.2022.09.016&amp;"/></mixed-citation></ref><ref id="ref25"><mixed-citation id="cit25"><named-content content-type="citation-string">Ye J.; Chen H.; Wang Q.; et al. Thermal behavior and
+failure mechanism of lithium-ion cells during overcharge under adiabatic
+conditions. Applied energy
+2016, 182, 464–474. 10.1016/j.apenergy.2016.08.124.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="doi" xlink:href="10.1016/j.apenergy.2016.08.124"/><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Applied energy&amp;title=Thermal behavior and failure mechanism of lithium-ion cells during overcharge under adiabatic conditions&amp;author=J. Ye&amp;author=H. Chen&amp;author=Q. Wang&amp;volume=182&amp;publication_year=2016&amp;pages=464-474&amp;doi=10.1016/j.apenergy.2016.08.124&amp;"/></mixed-citation></ref><ref id="ref26"><mixed-citation id="cit26"><named-content content-type="citation-string">Xie R.; Wu J.; Guo A.; et al. A numerical simulation study on the fire of
+lithium-ion batteries in warehouses based on PyroSim. Ind. Saf. Environ. Protect.
+2023, 9 (08), 18–23.</named-content><ext-link xmlns:xlink="http://www.w3.org/1999/xlink" ext-link-type="google-scholar" xlink:href="journal=Ind. Saf. Environ. Protect.&amp;title=A numerical simulation study on the fire of lithium-ion batteries in warehouses based on PyroSim&amp;author=R. Xie&amp;author=J. Wu&amp;author=A. Guo&amp;volume=9&amp;issue=08&amp;publication_year=2023&amp;pages=18-23&amp;"/></mixed-citation></ref></ref-list></sec></sec></body></article>

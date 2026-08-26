@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- JATS + MathML 合成样本：disp-formula 双通道（tex-math 优先 / mml:math 兜底）、
+     inline-formula、本地图形（media/graphic.png 同 fixture 目录，验证拷贝落盘）、
+     ref-list 结构化（element-citation 含 doi/year/author）。 -->
+<article xmlns:xlink="http://www.w3.org/1999/xlink"
+         xmlns:mml="http://www.w3.org/1998/Math/MathML"
+         article-type="research-article" xml:lang="en">
+  <front>
+    <journal-meta>
+      <journal-title-group>
+        <journal-title>Journal of Synthetic Fixtures</journal-title>
+      </journal-title-group>
+    </journal-meta>
+    <article-meta>
+      <article-id pub-id-type="doi">10.9999/jsf.2026.010101</article-id>
+      <title-group>
+        <article-title>Interfacial kinetics of model electrodes with <inline-formula><mml:math><mml:mrow><mml:mi mathvariant="normal">Na</mml:mi></mml:mrow></mml:math></inline-formula> layered oxides</article-title>
+      </title-group>
+      <contrib-group>
+        <contrib contrib-type="author">
+          <string-name>
+            <given-names>Anna B.</given-names>
+            <surname>Müller</surname>
+          </string-name>
+        </contrib>
+        <contrib contrib-type="author">
+          <string-name>
+            <given-names>Li</given-names>
+            <surname>Wang</surname>
+          </string-name>
+        </contrib>
+      </contrib-group>
+      <aff>Institute of Synthetic Fixtures, Example University</aff>
+      <pub-date pub-type="pub" date-type="pub">
+        <year>2026</year><month>01</month><day>20</day>
+      </pub-date>
+      <volume>12</volume>
+      <issue>3</issue>
+      <fpage>101</fpage><lpage>118</lpage>
+      <abstract>
+        <p>We measure the interfacial charge transfer resistance of model electrodes and derive a compact expression for the exchange current as a function of overpotential and temperature.</p>
+      </abstract>
+      <kwd-group>
+        <kwd>sodium-ion battery</kwd>
+        <kwd>charge transfer</kwd>
+        <kwd>EIS</kwd>
+      </kwd-group>
+    </article-meta>
+  </front>
+  <body>
+    <sec id="s1">
+      <title>Introduction</title>
+      <p>Interfacial kinetics govern the rate capability of layered oxide cathodes <xref ref-type="bibr" rid="B1">1</xref>. The exchange current density j<sub>0</sub> obeys the Butler–Volmer equation <xref ref-type="bibr" rid="B2">2</xref>, and for small overpotentials η the linearized form applies.</p>
+      <p>
+        <disp-formula id="e1">
+          <label>1</label>
+          <alternatives>
+            <tex-math>j = j_0 \left[ \exp\!\left( \frac{\alpha F \eta}{RT} \right) - \exp\!\left( -\frac{(1-\alpha) F \eta}{RT} \right) \right]</tex-math>
+            <mml:math><mml:mrow><mml:mi>j</mml:mi><mml:mo>=</mml:mo><mml:msub><mml:mi>j</mml:mi><mml:mn>0</mml:mn></mml:msub></mml:mrow></mml:math>
+          </alternatives>
+        </disp-formula>
+      </p>
+      <p>The temperature dependence of the rate constant is Arrhenius-like:
+        <disp-formula id="e2">
+          <label>2</label>
+          <mml:math>
+            <mml:mi>k</mml:mi><mml:mo>=</mml:mo>
+            <mml:mi>A</mml:mi>
+            <mml:msup><mml:mi>e</mml:mi>
+              <mml:mfrac>
+                <mml:mrow><mml:mo>−</mml:mo><mml:msub><mml:mi>E</mml:mi><mml:mi>a</mml:mi></mml:msub></mml:mrow>
+                <mml:mrow><mml:mi>R</mml:mi><mml:mi>T</mml:mi></mml:mrow>
+              </mml:mfrac>
+            </mml:msup>
+          </mml:math>
+        </disp-formula>
+      </p>
+    </sec>
+    <sec id="s2">
+      <title>Experimental</title>
+      <sec id="s2a">
+        <title>Cell assembly</title>
+        <p>Coin cells used a Na metal anode and the working composite described elsewhere <xref ref-type="bibr" rid="B3">3,4</xref>. The cell geometry is shown in <xref ref-type="fig" rid="F1">Figure 1</xref>.</p>
+        <fig id="F1">
+          <label>Figure 1</label>
+          <caption><p>Schematic of the model cell assembly used for EIS measurements.</p></caption>
+          <graphic xlink:href="graphic.png"/>
+        </fig>
+      </sec>
+      <sec id="s2b">
+        <title>Impedance spectroscopy</title>
+        <p>The fitted parameters are listed in <xref ref-type="table" rid="T1">Table 1</xref>.</p>
+        <table-wrap id="T1">
+          <label>Table 1</label>
+          <caption><p>Fitted EIS parameters for the model electrodes (error &lt; 5%).</p></caption>
+          <table>
+            <thead>
+              <tr><th>Sample</th><th>R<sub>b</sub> (Ω)</th><th>R<sub>ct</sub> (Ω)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>A</td><td>3.2</td><td>41.5</td></tr>
+              <tr><td>B</td><td>2.8</td><td>28.9</td></tr>
+            </tbody>
+          </table>
+        </table-wrap>
+      </sec>
+    </sec>
+  </body>
+  <back>
+    <ref-list>
+      <title>References</title>
+      <ref id="B1">
+        <label>1</label>
+        <mixed-citation>Y. You, A. Dolocan, W. Li, A. Manthiram, Understanding Na-ion storage in layered oxides, <italic> Joule</italic> 3 (2019) 112–124.</mixed-citation>
+        <element-citation publication-type="journal">
+          <person-group person-group-type="author">
+            <name><surname>You</surname><given-names>Y</given-names></name>
+            <name><surname>Dolocan</surname><given-names>A</given-names></name>
+            <name><surname>Manthiram</surname><given-names>A</given-names></name>
+          </person-group>
+          <article-title>Understanding Na-ion storage in layered oxides</article-title>
+          <source>Joule</source>
+          <year>2019</year>
+          <volume>3</volume>
+          <fpage>112</fpage><lpage>124</lpage>
+          <pub-id pub-id-type="doi">10.1016/j.joule.2018.11.011</pub-id>
+        </element-citation>
+      </ref>
+      <ref id="B2">
+        <label>2</label>
+        <mixed-citation>B. E. Conway, Theory and principles of electrode processes, <italic> J. Chem. Soc.</italic> 42 (1965) 55–61.</mixed-citation>
+      </ref>
+      <ref id="B3">
+        <label>3</label>
+        <element-citation publication-type="journal">
+          <person-group person-group-type="author">
+            <name><surname>Smith</surname><given-names>J</given-names></name>
+          </person-group>
+          <article-title>Composite electrode preparation for model cells</article-title>
+          <source>Methods Matter</source>
+          <year>2021</year>
+          <pub-id pub-id-type="doi">10.9999/mm.2021.003</pub-id>
+        </element-citation>
+      </ref>
+      <ref id="B4">
+        <label>4</label>
+        <mixed-citation>L. Wang, H. Schmidt, On the reproducibility of impedance fits, <italic> Data Brief</italic> 5 (2022) 7–9. doi:10.9999/db.2022.007</mixed-citation>
+      </ref>
+    </ref-list>
+  </back>
+</article>
