@@ -679,9 +679,14 @@ def _citation_raw(elem_cit: ET.Element) -> str:
             for nm in c.iter("name"):
                 given = next((x for x in nm if _localname(x.tag) == "given-names"), None)
                 surname = next((x for x in nm if _localname(x.tag) == "surname"), None)
-                full = " ".join(x for x in (
-                    _normalize_ws("".join(given.itertext())) if given is not None else "",
-                    _normalize_ws("".join(surname.itertext())) if surname is not None else "") if x)
+                g = _normalize_ws("".join(given.itertext())) if given is not None else ""
+                sn = _normalize_ws("".join(surname.itertext())) if surname is not None else ""
+                # CJK 姓氏（中文被引文献的混排元数据，2026-08-27 实测 SN ref7）用姓前名后，
+                # 与原文排版一致；西文维持名前姓后
+                if sn and re.search(r"[一-鿿]", sn):
+                    full = f"{sn} {g}".strip()
+                else:
+                    full = " ".join(x for x in (g, sn) if x)
                 if full:
                     names.append(full)
             if names:
