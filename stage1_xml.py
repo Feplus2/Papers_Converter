@@ -142,18 +142,27 @@ def _inline_any(el: ET.Element, base_dir: Path, images: dict) -> str:
         return f"${mathml_to_latex(el)}$"
     if tag == "sub" or tag == "inf":  # inf = Elsevier ce:inf 下标
         inner = _inline_text(el, base_dir, images).strip()
-        return "_{%s}" % inner if len(inner) > 1 else "_%s" % inner
+        return f"<sub>{inner}</sub>" if inner else ""
     if tag == "sup":
         inner = _inline_text(el, base_dir, images).strip()
-        # 上标引文（<sup><xref>[1]</xref></sup>）归一回契约形式 "[1]"
-        #（PDF 路径 _normalize_citation_sup 同款口径）
-        if re.fullmatch(r"\[[\d,\s;–—-]+\]", inner):
-            return inner
-        return "^{%s}" % inner if len(inner) > 1 else "^%s" % inner
+        return f"<sup>{inner}</sup>" if inner else ""
     if tag == "xref":
         t = _inline_text(el, base_dir, images).strip()
-        if el.get("ref-type") == "bibr" and re.fullmatch(r"\d+[\w,;\s–—-]*", t or ""):
-            t = f"[{t}]"
+        rt = el.get("ref-type")
+        if rt == "bibr":
+            if re.fullmatch(r"\d+[\w,;\s–—-]*", t or ""):
+                t = f"[{t}]"
+            # 引文转跳重建（PDF 路径 link_extractor 同款格式）：[N] → [N](#ref-N)，
+            # 多值逐个链接（"[2]–[3]" → [2](#ref-2)–[3](#ref-3)）；锚点由 refs 条目号发射
+            t = re.sub(r"\[(\d+)([a-z]?)\]", lambda m: f"[{m.group(1)}{m.group(2)}](#ref-{m.group(1)})", t)
+            return t
+        if rt == "fig" or rt == "table" or rt == "scheme":
+            # 图/表转跳重建：编号取 rid 数字（SN rid 形如 Fig3）或文本本身；
+            # 锚点 fig-N/tab-N 由图注编号发射（renderer 按锚点集发射）
+            m = re.search(r"(\d+)", el.get("rid") or "") or re.search(r"(\d+)", t or "")
+            if m:
+                kind = "tab" if rt == "table" else "fig"
+                return f"[{t}](#{kind}-{m.group(1)})"
         return t
     if tag == "break":
         return " "

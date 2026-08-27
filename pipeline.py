@@ -219,6 +219,14 @@ def convert_single(
     # 与链接驱动锚点合并去重（renderer 内 emitted_anchors 去重）
     if ref_entry_nums:
         link_anchors = (link_anchors or set()) | {f"ref-{n}" for n in ref_entry_nums}
+    if refs_override is not None:
+        # XML 管线：图/表锚点随正文 xref 链接一并发射（block_anchor_id 与注入器
+        # 共用口径：图注 "Figure N" → fig-N、表注 → tab-N），renderer 只发集合内的
+        from link_extractor import block_anchor_id
+        for b in blocks:
+            aid = block_anchor_id(b)
+            if aid and (aid.startswith("fig-") or aid.startswith("tab-")):
+                link_anchors = (link_anchors or set()) | {aid}
     paper_md = render_paper(
         blocks=blocks,
         metadata=metadata,
@@ -695,15 +703,15 @@ def convert_xml(
     def _on_progress(detail: str, frac: float | None = None):
         logger.info(f"  {detail}")
         if reporter:
-            reporter.update_stage(1, "xml", detail, frac)
+            reporter.update_stage(1, "XML 解析", detail, frac)
 
     logger.info(f"\n=== Stage 1: XML 解析 {xml_path.name} ===")
     if reporter:
-        reporter.update_stage(1, "xml", f"XML 解析 {xml_path.name}")
+        reporter.update_stage(1, "XML 解析", f"XML 解析 {xml_path.name}")
     t1 = time.time()
     parse_xml(xml_path, staging_dir, progress=_on_progress)
     if reporter:
-        reporter.complete_stage(1, "xml", time.time() - t1)
+        reporter.complete_stage(1, "XML 解析", time.time() - t1)
 
     meta_override = json.loads(
         (staging_dir / "xml_meta.json").read_text(encoding="utf-8"))

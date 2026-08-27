@@ -121,10 +121,11 @@ class TestJatsSample(unittest.TestCase):
     def test_inline_sup_sub_and_bibr(self):
         texts = [b.get("text", "") for b in self.blocks if b["type"] == "text"]
         joined = " ".join(texts)
-        self.assertIn("j_0", joined)          # <sub> 下标
-        self.assertIn("[1]", joined)          # bibr 引文补 []
-        self.assertIn("[3,4]", joined)        # 多值引文
-        self.assertNotIn("^{[", joined)       # 上标引文已归一
+        self.assertIn("j<sub>0</sub>", joined)  # sub 下标（HTML 形态；$..$ 转换在 content_processor）
+        self.assertIn("[1](#ref-1)", joined)  # bibr 引文补 [] + 转跳链接重建
+        self.assertIn("[2](#ref-2)", joined)
+        self.assertIn("[3,4]", joined)        # 逗号合并形态的多值引文（无逐个拆链，诚实保留）
+        self.assertNotIn("^{", joined)        # 不再产裸 ^{} 字面量
 
     def test_local_graphic_copied(self):
         imgs = [b for b in self.blocks if b["type"] in ("image", "chart")]
@@ -183,7 +184,7 @@ class TestElsevierSample(unittest.TestCase):
         texts = " ".join(b.get("text", "") for b in self.blocks if b["type"] == "text")
         self.assertIn("$\\sqrt{v}$", texts)
         # ce:inf 下标（单字符用紧凑形态 _b，PDF 路径同款）
-        self.assertIn("R_b", texts)
+        self.assertIn("R<sub>b</sub>", texts)
 
     def test_table_and_figures(self):
         tables = [b for b in self.blocks if b["type"] == "table"]
@@ -223,7 +224,7 @@ class TestRealPmc(unittest.TestCase):
 
     def test_sup_citation_normalized(self):
         joined = " ".join(b.get("text", "") for b in self.blocks if b["type"] == "text")
-        self.assertIn(",[1]", joined)
+        self.assertIn("<sup>[1](#ref-1)</sup>", joined)
         self.assertNotIn("^{[1]}", joined)
 
     def test_formula_graphic_degrade(self):
@@ -277,6 +278,13 @@ class TestConvertXmlEndToEnd(unittest.TestCase):
         self.assertIn("<table>", text)
         self.assertIn("# References", text)
         self.assertIn('<a id="ref-1"></a>[1]', text)
+        # 转跳链接重建：正文引文链到 ref 锚、图链到 fig 锚（锚点由 XML 管线发射）
+        self.assertIn("[1](#ref-1)", text)
+        self.assertIn("](#fig-1)", text)
+        self.assertIn('<a id="fig-1"></a>', text)
+        # 排版上下标经 content_processor 通道成行内数学（裸 ^{} 字面量不复存在；
+        # ^{ 仅存在于 $$ 展示公式内部，属合法 LaTeX）
+        self.assertIn("$_{0}$", text)
         # 图文件实际落盘
         img = self.paper_md.parent / "images" / "fig1.png"
         self.assertTrue(img.exists())
