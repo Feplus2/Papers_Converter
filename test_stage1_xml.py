@@ -231,6 +231,14 @@ class TestRealPmc(unittest.TestCase):
         joined = " ".join(b.get("text", "") for b in self.blocks if b["type"] == "text")
         self.assertIn("[公式 ", joined)
 
+    def test_footnotes_preserved(self):
+        """PMC 的 author-notes 通讯邮箱 fn 不再丢弃（page_footnote 块进 PDF 脚注通道）。"""
+        fns = [b for b in self.blocks if b["type"] == "page_footnote"]
+        self.assertEqual(len(fns), 2)
+        joined = " ".join(b["text"] for b in fns)
+        self.assertIn("loganlz@zzuli.edu.cn", joined)
+        self.assertIn("2015041@zzuli.edu.cn", joined)
+
     def test_references_count(self):
         self.assertEqual(self.refs["count"], 26)
         self.assertTrue(all(r["raw"].startswith("[") for r in self.refs["references"]))

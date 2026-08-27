@@ -510,6 +510,19 @@ class _Walker:
             tex = f"{tex} \\tag{{{label}}}"
         self.blocks.append({"type": "equation", "text": tex, "page_idx": 0})
 
+    def footnote(self, fn_el: ET.Element):
+        """JATS <fn>（author-notes 通讯邮箱 / fn-group 脚注）→ page_footnote 块。
+
+        复用 PDF 路径的脚注通道（content_processor 解析编号 / renderer 出 [^N]: 定义），
+        数字 label 走编号脚注，符号 label（* † 等）按 PDF 路径符号脚注口径原样成段。
+        """
+        label = next(fn_el.iter("label"), None)
+        label_t = _normalize_ws("".join(label.itertext())) if label is not None else ""
+        paras = [_normalize_ws("".join(p.itertext())) for p in fn_el.iter("p")]
+        text = " ".join(x for x in ([label_t] if label_t else []) + [t for t in paras if t])
+        if text:
+            self.blocks.append({"type": "page_footnote", "text": text, "page_idx": 0})
+
     def fig_element(self, fig_el: ET.Element):
         """JATS <fig>（sec 级或段落内嵌两路入口）：label+caption → figure()。"""
         cap = _caption_text(next(fig_el.iter("caption"), None))
@@ -811,6 +824,12 @@ def parse(xml_path, staging_dir, progress=None) -> Path:
                 elif tag == "p":
                     walker.paragraph(child)
             # 附录（back/app）按同级章节处理
+            # 脚注：author-notes（通讯作者邮箱等，front 内）与 back/fn-group——
+            # PMC 实测 author-notes 内嵌 fn（此前被静默丢弃）
+            for group_tag in ("author-notes", "fn-group"):
+                for group in root.iter(group_tag):
+                    for fn in group.iter("fn"):
+                        walker.footnote(fn)
             back = next(root.iter("back"), None)
             if back is not None:
                 for app in back:
