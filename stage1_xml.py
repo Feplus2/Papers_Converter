@@ -396,13 +396,49 @@ def _table_html(table_el: ET.Element) -> str:
     return html.strip()
 
 
+def _fetch_sn_media(href: str, doi: str, images_dir: Path) -> Path | None:
+    """Springer Nature 远端媒体下载：MediaObjects/{file} → media.springernature.com 全图。
+
+    SN JATS 的 graphic href 是 MediaObjects 相对名（非本地文件），全文图在出版社
+    内容服务器上；URL 由文章 DOI 规则构造（2026-08-27 实测 200，3.35MB PNG）：
+    https://media.springernature.com/full/springer-static/image/art%3A{doi 的 / 转 %2F}/MediaObjects/{file}
+    失败（网络/404/非图）返回 None 走既定降级路径（图注文本保底）。
+    """
+    if not doi or "MediaObjects/" not in href:
+        return None
+    import requests
+    filename = href.rsplit("MediaObjects/", 1)[-1]
+    if not filename:
+        return None
+    doi_enc = doi.replace("/", "%2F")
+    url = f"https://media.springernature.com/full/springer-static/image/art%3A{doi_enc}/MediaObjects/{filename}"
+    try:
+        resp = requests.get(url, timeout=30)
+        if resp.status_code != 200 or len(resp.content) < 1000:
+            return None
+        ctype = resp.headers.get("content-type", "")
+        if ctype and "image" not in ctype:
+            return None
+        images_dir.mkdir(parents=True, exist_ok=True)
+        out = images_dir / filename
+        out.write_bytes(resp.content)
+        logger.info(f"  [springer-media] 下载 {filename} ({len(resp.content)} bytes)")
+        return out
+    except Exception as e:
+        logger.warning(f"  [springer-media] 下载失败 {filename}: {e}")
+        return None
+
+
 class _Walker:
-    def __init__(self, base_dir: Path):
+    def __init__(self, base_dir: Path, doi: str = "", media_dir: Path | None = None):
         self.base_dir = base_dir
+        self.doi = doi
+        self.media_dir = media_dir  # staging images/（SN 远端媒体落点）
         self.images: dict[str, Path] = {}
         self.blocks: list[dict] = []
         self.degraded_figures = 0
         self.degraded_formulas = 0
+        self.remote_images = 0
 
     def heading(self, text: str, level: int):
         if text:
@@ -455,6 +491,13 @@ class _Walker:
                     tag2 == "formula" and child.get("type") == "inline"):
                 flush()
                 self.formula(child)
+            elif tag2 == "fig":
+                # SN 常把 fig 嵌在段落里：拆块走 figure 通道（行内通道只吐占位文本）
+                flush()
+                self.fig_element(child)
+            elif tag2 == "table-wrap":
+                flush()
+                self.table_wrap_element(child)
             else:
                 buf.append(_inline_any(child, self.base_dir, self.images))
             if child.tail:
@@ -467,8 +510,40 @@ class _Walker:
             tex = f"{tex} \\tag{{{label}}}"
         self.blocks.append({"type": "equation", "text": tex, "page_idx": 0})
 
+    def fig_element(self, fig_el: ET.Element):
+        """JATS <fig>（sec 级或段落内嵌两路入口）：label+caption → figure()。"""
+        cap = _caption_text(next(fig_el.iter("caption"), None))
+        label = next(fig_el.iter("label"), None)
+        label_t = _normalize_ws("".join(label.itertext())) if label is not None else ""
+        cap_full = f"{label_t} {cap}".strip() if label_t else cap
+        # Europe PMC 每图带 jpg+gif 双 graphic（同图双格式），只取首个
+        g = next(fig_el.iter("graphic"), None)
+        if g is not None:
+            self.figure(_href_of(g), cap_full)
+        elif cap_full:
+            self.para(cap_full)
+
+    def table_wrap_element(self, wrap_el: ET.Element):
+        """JATS <table-wrap>：caption + HTML 表 / graphic 表。"""
+        cap = _caption_text(next(wrap_el.iter("caption"), None))
+        label = next(wrap_el.iter("label"), None)
+        label_t = _normalize_ws("".join(label.itertext())) if label is not None else ""
+        cap_full = f"{label_t} {cap}".strip() if label_t else cap
+        tbl = next(wrap_el.iter("table"), None)
+        if tbl is not None:
+            self.table(tbl, cap_full)
+        else:
+            g = next(wrap_el.iter("graphic"), None)
+            if g is not None:
+                self.figure(_href_of(g), cap_full)
+
     def figure(self, href: str, caption: str, kind: str = "image"):
         local = _resolve_graphic(href, self.base_dir)
+        if local is None and self.doi and self.media_dir is not None and "MediaObjects/" in href:
+            remote = _fetch_sn_media(href, self.doi, self.media_dir)
+            if remote is not None:
+                self.remote_images += 1
+                local = remote
         if local is None:
             # 图不可得：图注文本降级为段落（零文本丢失），计退化数
             self.degraded_figures += 1
@@ -504,26 +579,9 @@ def _walk_jats_sec(sec: ET.Element, w: _Walker, depth: int):
         elif tag == "disp-formula":
             w.formula(child)
         elif tag == "fig":
-            cap = _caption_text(next(child.iter("caption"), None))
-            label = next(child.iter("label"), None)
-            label_t = _normalize_ws("".join(label.itertext())) if label is not None else ""
-            cap_full = f"{label_t} {cap}".strip() if label_t else cap
-            # Europe PMC 每图带 jpg+gif 双 graphic（同图双格式），只取首个
-            g = next(child.iter("graphic"), None)
-            if g is not None:
-                w.figure(_href_of(g), cap_full)
+            w.fig_element(child)
         elif tag == "table-wrap":
-            cap = _caption_text(next(child.iter("caption"), None))
-            label = next(child.iter("label"), None)
-            label_t = _normalize_ws("".join(label.itertext())) if label is not None else ""
-            cap_full = f"{label_t} {cap}".strip() if label_t else cap
-            tbl = next(child.iter("table"), None)
-            if tbl is not None:
-                w.table(tbl, cap_full)
-            else:
-                g = next(child.iter("graphic"), None)
-                if g is not None:
-                    w.figure(_href_of(g), cap_full)
+            w.table_wrap_element(child)
         elif tag == "list":
             for li in child:
                 if _localname(li.tag) == "list-item":
@@ -589,6 +647,9 @@ def _citation_raw(elem_cit: ET.Element) -> str:
     直接子元素各成一节以空格相连（itertext 整树拍平会把
     "Smith"+"J" 粘成 "SmithJ"）；person-group 内 name 先拼 "Given Surname"。"""
     parts = []
+    # 元素自身的直接文本（纯文本型 mixed-citation 的全部内容都在 .text，无子元素）
+    if elem_cit.text and elem_cit.text.strip():
+        parts.append(_normalize_ws(elem_cit.text))
     for c in elem_cit:
         tag = _localname(c.tag)
         if tag == "person-group":
@@ -607,6 +668,8 @@ def _citation_raw(elem_cit: ET.Element) -> str:
             t = _normalize_ws("".join(c.itertext()))
             if t:
                 parts.append(t)
+        if c.tail and c.tail.strip():
+            parts.append(_normalize_ws(c.tail))
     return " ".join(parts)
 
 
@@ -622,13 +685,18 @@ def _ref_payload_jats(root: ET.Element) -> dict | None:
         if label_t and re.fullmatch(r"\d+", label_t):
             n = int(label_t)
         n = n if n is not None else i
-        # raw：mixed-citation（出版商混排原文）优先，否则 element-citation 拼接
-        mixed = next((c for c in ref if _localname(c.tag) == "mixed-citation"), None)
-        elem_cit = next((c for c in ref if _localname(c.tag) in
-                         ("element-citation", "citation", "nlm-citation")), None)
-        if mixed is not None:
-            raw = _normalize_ws("".join(mixed.itertext()))
-        elif elem_cit is not None:
+        # raw 与结构化提取共用：SN 现行 ref 用 mixed-citation，内部结构与 element-citation
+        # 同构（person-group/pub-id/source/year）——纳入 elem_cit 候选，raw 走 _citation_raw
+        # 重组（itertext 拍平会把姓名粘成 "GoelGSharmaM"，2026-08-27 Carbon Neutrality 实测）
+        # 优先 element-citation（结构最规范）；mixed-citation 兜底（SN 现行标签，
+        # 内部同构但部分老存档的 mixed 只是拍平文本）
+        # 按优先级逐个找（next+集合是文档序优先，mixed 排前会被先选中——2026-08-27 实测踩坑）
+        elem_cit = None
+        for _cit_tag in ("element-citation", "citation", "nlm-citation", "mixed-citation"):
+            elem_cit = next((c for c in ref if _localname(c.tag) == _cit_tag), None)
+            if elem_cit is not None:
+                break
+        if elem_cit is not None:
             raw = _citation_raw(elem_cit)
         else:
             raw = ""
@@ -730,7 +798,9 @@ def parse(xml_path, staging_dir, progress=None) -> Path:
 
     if progress:
         progress(f"提取正文（{flavor}）", 0.5)
-    walker = _Walker(xml_path.parent)
+    images_dir = staging_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    walker = _Walker(xml_path.parent, doi=meta.get("doi", ""), media_dir=images_dir)
     if flavor == "jats":
         body = next(root.iter("body"), None)
         if body is not None:
@@ -762,10 +832,9 @@ def parse(xml_path, staging_dir, progress=None) -> Path:
 
     if progress:
         progress("落盘 staging 产物", 0.8)
-    images_dir = staging_dir / "images"
-    images_dir.mkdir(exist_ok=True)
     for name, src in walker.images.items():
-        shutil.copy2(src, images_dir / name)
+        if src.parent != images_dir:  # SN 远端下载的直接落在 staging，防同路径自拷
+            shutil.copy2(src, images_dir / name)
 
     cl_path = staging_dir / f"{xml_path.stem}_content_list.json"
     cl_path.write_text(json.dumps(walker.blocks, ensure_ascii=False, indent=1),
@@ -780,6 +849,7 @@ def parse(xml_path, staging_dir, progress=None) -> Path:
     if degraded:
         logger.warning(f"  XML 降级块: 图 {walker.degraded_figures} 个 / 公式 "
                        f"{walker.degraded_formulas} 个（外链资源不可得，文本占位保底）")
-    logger.info(f"  XML 解析完成: {len(walker.blocks)} 块 / 图片 {len(walker.images)} 张 / "
+    logger.info(f"  XML 解析完成: {len(walker.blocks)} 块 / 图片 {len(walker.images)} 张"
+                f"（远端下载 {walker.remote_images}）/ "
                 f"参考文献 {refs_payload['count'] if refs_payload else 0} 条")
     return cl_path
