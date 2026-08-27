@@ -62,6 +62,7 @@ def convert_single(
     keep_links: bool | None = None,
     meta_override: dict | None = None,
     refs_override: dict | None = None,
+    source_xml: Path | None = None,
 ) -> Path | None:
     """
     转换单篇论文（从已解析产物目录）。
@@ -235,6 +236,7 @@ def convert_single(
         source_pdf=source_pdf,
         images_source_dir=images_dir if images_dir.exists() else None,
         link_anchors=link_anchors,
+        source_xml=source_xml,
     )
     if reporter:
         reporter.complete_stage(4, "渲染装订", time.time() - t4)
@@ -724,6 +726,7 @@ def convert_xml(
         staging_dir, output_dir, use_llm=use_llm,
         zotero_key=zotero_key, reporter=reporter,
         meta_override=meta_override, refs_override=refs_override,
+        source_xml=xml_path,
     )
 
 

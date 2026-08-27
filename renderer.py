@@ -37,6 +37,7 @@ def render_paper(
     output_dir: Path,
     slug: str,
     source_pdf: Path | None = None,
+    source_xml: Path | None = None,
     images_source_dir: Path | None = None,
     link_anchors: set | None = None,
 ) -> Path:
@@ -80,6 +81,11 @@ def render_paper(
     # 写入文件（UTF-8 + LF）
     paper_md_path = paper_dir / "paper.md"
     paper_md_path.write_text(doc, encoding="utf-8", newline="\n")
+
+    # 复制 source.xml（XML 管线源文件，可选）：重解析据此重走 XML 管线
+    #（exe 按扩展名分派），重新处理正文并重试远端图下载
+    if source_xml and source_xml.exists():
+        shutil.copyfile(source_xml, paper_dir / "source.xml")
 
     # 复制 source.pdf（可选）
     if source_pdf and source_pdf.exists():

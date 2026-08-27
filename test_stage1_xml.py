@@ -288,6 +288,10 @@ class TestConvertXmlEndToEnd(unittest.TestCase):
         # 图文件实际落盘
         img = self.paper_md.parent / "images" / "fig1.png"
         self.assertTrue(img.exists())
+        # source.xml 随产物落盘（重解析据此重走 XML 管线）
+        src_xml = self.paper_md.parent / "source.xml"
+        self.assertTrue(src_xml.exists())
+        self.assertIn("<article", src_xml.read_text(encoding="utf-8")[:2000])
 
     def test_references_json(self):
         rj = self.paper_md.parent / "references.json"
