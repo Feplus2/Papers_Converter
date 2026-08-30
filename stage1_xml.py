@@ -417,6 +417,8 @@ def _fetch_sn_media(href: str, doi: str, images_dir: Path) -> Path | None:
         return None
     import requests
     filename = href.rsplit("MediaObjects/", 1)[-1]
+    # 路径穿越防御：XML href 不可信，剥掉目录段只留文件名（防 "../" 段越出 images/ 落盘）
+    filename = Path(filename).name
     if not filename:
         return None
     doi_enc = doi.replace("/", "%2F")

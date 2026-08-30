@@ -1,10 +1,12 @@
 # Papers_Converter
 
-论文 PDF → Pandoc Markdown 转换管线（SageRead 论文模块的上游 sidecar，与 books_converter 同级）。
+论文 PDF / XML → Pandoc Markdown 转换管线（SageRead 论文模块的上游 sidecar，与 books_converter 同级）。
 
 输入：PDF（经可插拔解析引擎；仓库默认 PaddleOCR-VL（`config.py`），Better
-SageRead 集成默认 MinerU-VLM 强制 OCR）或已解析产物（`content_list.json`）。
-输出：`{slug}/paper.md + images/ + source.pdf`，格式契约见 SageRead `docs/paper-format-contract.md`。
+SageRead 集成默认 MinerU-VLM 强制 OCR）、出版社全文 XML（JATS / Elsevier 变体，
+本地确定性解析，见"XML 管线"节）或已解析产物（`content_list.json`）。
+输出：`{slug}/paper.md + images/ + source.pdf`（XML 输入时拷为 `source.xml`；
+有参考文献区时附增量产物 `references.json`），格式契约见 SageRead `docs/paper-format-contract.md`。
 早期引擎调研见 `docs/ocr-providers.md`（2026-08-03 止的历史档案，部分结论已被
 2026-08-11 光栅重裁推翻，见该文文首标注）。
 
@@ -76,6 +78,8 @@ stage1_layout.py     layout 系引擎共享转换：标签映射、图注挂回�
 stage1_mineru.py     MinerU Provider：云解析（分片/重试）→ content_list + images
 stage1_paddleocr.py  PaddleOCR-VL Provider：百度 AI Studio 异步 job API（≤1000 页/任务）
 stage1_glm.py        GLM-OCR Provider：已下线（代码保留，不推荐；不在兜底链中）
+stage1_xml.py        Stage 1 XML 适配器：JATS/Elsevier XML → content_list + images
+                     + xml_meta + xml_references（本地确定性，无 OCR/VLM；见"XML 管线"节）
 metadata.py          元数据（规则/LLM/CrossRef；Zotero 优先经 zotero_meta.py）
 cover_detect.py      封面页判定统一实现（content_processor / metadata 共用）
 article_boundary.py  脏 PDF 文章边界切分（默认开，见"结构判定"节）
@@ -91,6 +95,34 @@ qc_paper.py          单篇产物 QC：WARN 级检查 + 严重级判据（交付
 qc_scan.py           验收门禁（见下）
 progress_headless.py 无界面进度报告器（SageRead sidecar 的 JSON 行协议）
 ```
+
+## XML 管线（stage1_xml.py，JATS / Elsevier 全文）
+
+PDF 之外的第二条输入路：出版社全文 XML → 与 PDF 路径同构的 paper.md。
+解析是本地确定性的（XML 自带语义结构，无 OCR/VLM、无退化重试、无完整性闸）；
+产物与 PDF 引擎 staging 完全同构，下游 `convert_single` 全复用（paper-format-contract
+契约不变，阅读器/向量化/翻译不感知来源）。
+
+```bash
+.venv/Scripts/python pipeline.py D:\papers\some.xml   # 按扩展名 .xml 自动分派
+```
+
+- **方言覆盖**：JATS（PMC/eLife/Hindawi 等，front/article-meta + body/sec +
+  back/ref-list）；Elsevier `ce:` 变体（ScienceDirect 全文：ce:sections/ce:formula/
+  ce:figure/ce:table/ce:bib）。
+- **权威元数据直通**：front matter（xml_meta.json）经 zotero_meta 同通道注入——
+  author/date/container-title 以 XML 为准（同 PDF 路径的 Zotero 权威语义）。
+- **结构化参考文献**：`<ref-list>` 直接提取为 xml_references.json（references.json
+  同 schema、`source="xml"`，比 PDF 路径的正则+LLM 重建可靠），可选 LLM 补齐字段
+  （XML 结构化字段优先，冲突不覆盖）。
+- **公式**：tex-math 优先，`mml:math` 走 mathml_tex 转换；graphic 形态公式降级占位。
+- **图片**：本地 href 同目录/子目录拷入；Springer Nature 远端图（MediaObjects/ 相对名）
+  按 DOI 规则构造 media.springernature.com URL 下载全图，失败走既定降级（图注文本保底）。
+- 源 XML 拷为 `source.xml` 随产物落盘——SageRead 重解析据此重走本管线并重试远端图下载。
+
+fixtures 测试（`test_stage1_xml.py`，fixtures 在 `data/xml_fixtures/`：真实 PMC 双样本 +
+Elsevier/MathML 合成样本）：meta / 公式双通道 / 段内公式拆块 / 本地图拷贝 / 结构化
+参考文献 / convert_xml 端到端（--no-llm）共五组，离线可跑。
 
 ## 退化检测与打回重解析（quality_guard.py）
 
@@ -188,7 +220,7 @@ OCR 引擎都复现，根因在引擎产物之后的规则层）。现行三个�
 ## 测试
 
 ```bash
-.venv/Scripts/python -m unittest test_quality_guard test_cover_detect test_article_boundary test_equation_tags
+.venv/Scripts/python -m unittest test_quality_guard test_cover_detect test_article_boundary test_equation_tags test_stage1_xml
 ```
 
 - `test_quality_guard`：退化检测 + 完整性闸（真实事故样本/正常样本/合成样例
@@ -198,6 +230,7 @@ OCR 引擎都复现，根因在引擎产物之后的规则层）。现行三个�
   事故样本经 `ZOTERO_PARSED_DIR` 指定，未设置时自动 skip）
 - `test_article_boundary`：脏 PDF 边界切分（stub IR 块，无外部依赖）
 - `test_equation_tags`：公式 `\tag` 去重（含编号拆行伪影的真实事故形态）
+- `test_stage1_xml`：XML 管线（fixtures 见"XML 管线"节，离线可跑）
 
 ## 已知局限（诚实清单）
 
