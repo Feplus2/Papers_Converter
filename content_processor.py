@@ -827,9 +827,10 @@ def _build_ir(blocks: list[dict], images_dir: str) -> list[ProcessedBlock]:
             text = cleaned
             # 三级标题形态（RSC 综述实测：x.y.z 短标题与正文粘连在同一块，
             # 引擎不给 text_level）：编号三位点号 + 短标题句（≤80 字符、句号收尾）
-            # + 正文接续（大写起首 ≥40 字符）→ 拆为三级标题 + 正文段
+            # + 正文接续（大写/行内公式起首 ≥40 字符；wang2024routes 实测 5.6.1
+            # 正文以 $Na_{x}...$ 起首，纯大写类判定会漏拆）→ 拆为三级标题 + 正文段
             h3_match = re.match(
-                r"^(\d+\.\d+\.\d+)\.?\s+([A-Z][^.\n]{4,80}?)\.\s+([A-Z(].{40,})$",
+                r"^(\d+\.\d+\.\d+)\.?\s+([A-Z][^.\n]{4,80}?)\.\s+([A-Z($].{40,})$",
                 text, re.S)
             if h3_match and _DOTTED_NUM_RE.match(text):
                 h3_title = f"{h3_match.group(1)} {h3_match.group(2).strip()}"
@@ -1339,6 +1340,62 @@ def _clean_spaced_heading(text: str) -> str:
     return text
 
 
+# 标题纯文本化用的上/下标 unicode 映射（仅覆盖映射干净的字符：
+# 数字 + 运算符 + n/i 上标；含其他字符的脚本整体退化纯文本，不混搭）
+_SUP_CHARS = "0123456789+-=()ni"
+_SUB_CHARS = "0123456789+-=()"
+_SUP_TRANS = str.maketrans(_SUP_CHARS, "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ")
+_SUB_TRANS = str.maketrans(_SUB_CHARS, "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎")
+
+# 行内公式段（排除 $$ 显示公式与跨行段）
+_INLINE_MATH_RE = re.compile(r"(?<!\$)\$(?!\$)([^$\n]+?)\$(?!\$)")
+# 标题公式里允许剥壳的文本命令
+_HEADING_TEXT_CMD_RE = re.compile(
+    r"\\(?:mathrm|mathit|mathbf|mathsf|mathnormal|text|operatorname)"
+    r"\{([^{}]*)\}")
+
+
+def _plain_script(content: str, chars: str, trans: dict) -> str:
+    """脚本内容 → unicode 上/下标；有字符无映射时整段退化纯文本。"""
+    if content and all(c in chars for c in content):
+        return content.translate(trans)
+    return content
+
+
+def _heading_plain_math(text: str) -> str:
+    r"""标题内联公式 → 纯文本（TOC/锚点/检索共用 heading 文本，不能夹带
+    原始 LaTeX——SageRead TOC 以渲染 DOM 的 textContent 取标题，
+    "$^{+}$" 会漏成 "+^{+}" 残留）。
+
+    只转换可被"文本命令剥壳 + 上下标 unicode 化"完全归约的 $...$ 段
+    （$^{+}$ → ⁺、$_{2}$ → ₂、$\mathrm{Na}$ → Na）；
+    含未识别命令/结构的段保留 $...$ 原样（正文 KaTeX 仍能渲染，好过硬转出垃圾）。
+    """
+    if "$" not in text:
+        return text
+
+    def _conv(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        prev = None
+        while prev != inner:
+            prev = inner
+            inner = _HEADING_TEXT_CMD_RE.sub(r"\1", inner)
+        inner = re.sub(r"\^\{([^{}]*)\}",
+                       lambda s: _plain_script(s.group(1), _SUP_CHARS, _SUP_TRANS), inner)
+        inner = re.sub(r"_\{([^{}]*)\}",
+                       lambda s: _plain_script(s.group(1), _SUB_CHARS, _SUB_TRANS), inner)
+        inner = re.sub(r"\^([^\s{])",
+                       lambda s: _plain_script(s.group(1), _SUP_CHARS, _SUP_TRANS), inner)
+        inner = re.sub(r"_([^\s{])",
+                       lambda s: _plain_script(s.group(1), _SUB_CHARS, _SUB_TRANS), inner)
+        # 残留 LaTeX 结构（命令/花括号/脚本符）→ 放弃转换，保留原段
+        if re.search(r"[\\{}^_]", inner):
+            return m.group(0)
+        return inner
+
+    return _INLINE_MATH_RE.sub(_conv, text)
+
+
 def _assign_heading_levels(blocks: list[ProcessedBlock]) -> None:
     """重建 heading 的 Markdown 层级。
 
@@ -1355,9 +1412,10 @@ def _assign_heading_levels(blocks: list[ProcessedBlock]) -> None:
     if not headings:
         return
 
-    # 先归一化空格拆字标题（"A B S T R A C T" → "Abstract"）
+    # 先归一化空格拆字标题（"A B S T R A C T" → "Abstract"）与内联公式残留
+    # （"Na $^{+}$ sites" → "Na⁺ sites"——heading 文本进 TOC/锚点，须为纯文本）
     for h in headings:
-        cleaned = _clean_spaced_heading(h.content)
+        cleaned = _heading_plain_math(_clean_spaced_heading(h.content))
         if cleaned != h.content:
             h.content = cleaned
 

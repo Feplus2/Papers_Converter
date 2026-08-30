@@ -474,6 +474,53 @@ class TestH3HeadingSplit(unittest.TestCase):
         self.assertFalse(any(b.kind == "heading" and "3.2.1" in b.content
                              for b in blocks))
 
+    def test_h3_split_math_body(self):
+        # wang2024routes 实测 5.6.1：正文以行内公式 $Na_{x}...$ 起首，
+        # 旧判定要求大写/( 起首导致漏拆，TOC 缺 5.6.1
+        cl = [
+            {"type": "text", "text": "5.6 Crystal parameter modulation.",
+             "page_idx": 31, "text_level": 2},
+            {"type": "text", "page_idx": 31,
+             "text": "5.6.1 Honeycomb ordered superlattice structure. "
+                    "$Na_{x}[M1,M2]O_{2}$ layered oxides have gained "
+                    "significant popularity due to the binary potential "
+                    "properties of two different transition metals."},
+        ]
+        blocks = process_content(cl, "", use_llm=False, title="Routes test")
+        heads = [b for b in blocks if b.kind == "heading"]
+        self.assertTrue(
+            any(h.content == "5.6.1 Honeycomb ordered superlattice structure"
+                and h.level == 3 for h in heads),
+            [(h.content[:40], h.level) for h in heads])
+        paras = [b for b in blocks if b.kind == "paragraph"]
+        self.assertTrue(any(p.content.startswith("$Na_{x}[M1,M2]O_{2}$ layered")
+                            for p in paras))
+
+    def test_h3_heading_math_plaintext(self):
+        # heading 文本进 TOC/锚点须为纯文本：$^{+}$ 归一为 unicode 上标 ⁺，
+        # 不留 "$"/"^{}" LaTeX 残留（wang2024routes 5.6.3 实测）
+        cl = [{"type": "text", "page_idx": 40,
+               "text": "5.6.3 Na $^{+}$ sites occupation. Besides the "
+                      "traditional substitution of transition metal atoms, "
+                      "the introduction of foreign atoms in the alkali sites "
+                      "is also a feasible way."}]
+        blocks = process_content(cl, "", use_llm=False, title="Routes test")
+        heads = [b for b in blocks if b.kind == "heading"]
+        self.assertEqual(len(heads), 1)
+        self.assertEqual(heads[0].content, "5.6.3 Na ⁺ sites occupation")
+        self.assertNotIn("$", heads[0].content)
+        self.assertNotIn("^{", heads[0].content)
+
+    def test_heading_complex_math_kept(self):
+        # 无法完全归约的公式段（含未识别命令）保持 $...$ 原样，不出垃圾文本
+        from content_processor import _heading_plain_math
+        src = r"3.1 The $O3 \leftrightarrow P3$ transition"
+        self.assertEqual(_heading_plain_math(src), src)
+        # \mathrm 剥壳 + 下标 unicode 化
+        self.assertEqual(_heading_plain_math(r"$\mathrm{Na}$ sites"),
+                         "Na sites")
+        self.assertEqual(_heading_plain_math(r"$_{2}$ layer"), "₂ layer")
+
 
 class TestMathBraceRepair(unittest.TestCase):
     """D 修复：数学段花括号多开失衡的尾补 }。"""
