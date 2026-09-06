@@ -23,6 +23,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import re
 import shutil
 import sys
@@ -416,6 +417,35 @@ def _sniff_coord_space(staging_dir: Path) -> str | None:
     return None
 
 
+def _staging_paths(pdf_path: Path, output_dir: Path) -> tuple[Path, Path]:
+    """staging 目录与引擎入口路径（Windows MAX_PATH=260 防护）。
+
+    用户实测（Zotero 批量导入，90+ 篇）：Zotero 按条目标题重命名的 PDF
+    标题可超 120 字符；staging 目录与引擎内层产物名（{stem}_content_list.json、
+    images/<64位哈希>.jpg）全部派生自 stem，双层叠加必超 260 → [Errno 2]。
+    分界线精确落在 260 字符（≤84 字符标题全成功，112 字符全失败）。
+
+    短 stem（≤40）沿用 {stem}-{md5前6} 原名（存量缓存目录不受命名变化影响）；
+    超长时 staging 用 {stem[:24]}-{digest} 短名，并给引擎硬链接别名——
+    引擎内层产物文件名随之全部短路径。source_pdf/元数据仍用原始路径
+    （frontmatter 的 Zotero 回链不变）。
+    """
+    digest = hashlib.md5(pdf_path.read_bytes()).hexdigest()[:6]
+    stem = pdf_path.stem
+    if len(stem) <= 40:
+        return output_dir / "_staging" / f"{stem}-{digest}", pdf_path
+    stem_short = f"{stem[:24]}-{digest}"
+    staging_dir = output_dir / "_staging" / stem_short
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    alias = staging_dir / f"{stem_short}{pdf_path.suffix}"
+    if not alias.exists():
+        try:
+            os.link(pdf_path, alias)  # 硬链接零拷贝（同卷）
+        except OSError:
+            shutil.copyfile(pdf_path, alias)
+    return staging_dir, alias
+
+
 def convert_pdf(
     pdf_path: Path,
     output_dir: Path,
@@ -466,10 +496,10 @@ def convert_pdf(
     if reporter:
         reporter.start()
 
-    # staging 以 stem+内容哈希命名：不同论文都可能叫 source.pdf，仅按 stem 会碰撞
-    import hashlib
-    digest = hashlib.md5(pdf_path.read_bytes()).hexdigest()[:6]
-    staging_dir = output_dir / "_staging" / f"{pdf_path.stem}-{digest}"
+    # staging 命名与引擎入口（MAX_PATH 防护见 _staging_paths 文档）
+    staging_dir, engine_path = _staging_paths(pdf_path, output_dir)
+    digest = staging_dir.name.rsplit("-", 1)[-1]  # 快照目录等下游沿用
+    engine_path_str = str(engine_path)
 
     def _on_progress(detail: str, frac: float | None = None):
         logger.info(f"  {detail}")
@@ -488,7 +518,7 @@ def convert_pdf(
         # 退化检测与打回重解析：VLM 引擎偶发"模式延续"失控（如波长列从真实值
         # 一路编造递增、单词重复数百次），失控是随机的，重跑常能自愈
         for attempt in range(1, quality_guard.MAX_STAGE1_RETRIES + 2):
-            provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
+            provider.parse(engine_path_str, str(staging_dir), ocr=ocr,
                            progress=_on_progress,
                            **_retry_opts(provider, provider_opts, attempt))
             finding = quality_guard.check_staging_dir(staging_dir)
@@ -497,7 +527,7 @@ def convert_pdf(
             logger.warning(
                 f"  stage1 产物退化检测命中: {quality_guard.describe(finding)}")
             if attempt > quality_guard.MAX_STAGE1_RETRIES:
-                if _degenerate_fallback_parse(provider, provider_opts, str(pdf_path),
+                if _degenerate_fallback_parse(provider, provider_opts, engine_path_str,
                                               staging_dir, ocr, _on_progress):
                     effective_provider_name = "mineru"
                     if reporter:
@@ -583,7 +613,7 @@ def convert_pdf(
             detail = f"产物不完整（图/表断号或整页丢失），重新解析（第 {attempt} 次）"
             logger.warning(f"  {detail}")
             reporter.update_stage(1, provider.name, detail)
-            provider.parse(str(pdf_path), str(staging_dir), ocr=ocr,
+            provider.parse(engine_path_str, str(staging_dir), ocr=ocr,
                            progress=_on_progress,
                            **_retry_opts(provider, provider_opts, attempt + 1))
             paper_md = convert_single(
@@ -605,7 +635,7 @@ def convert_pdf(
                     fb = get_provider(fb_name)
                     logger.warning(f"  产物不完整，自动换引擎重解析: {fb_label}")
                     reporter.update_stage(1, provider.name, f"产物不完整，自动换 {fb_label} 重解析")
-                    fb.parse(str(pdf_path), str(staging_dir), ocr=ocr, progress=_on_progress, **fb_opts)
+                    fb.parse(engine_path_str, str(staging_dir), ocr=ocr, progress=_on_progress, **fb_opts)
                 except Exception as e:
                     logger.warning(f"  换引擎 {fb_label} 解析失败（尝试下一候选）: {e}")
                     continue
@@ -699,8 +729,9 @@ def convert_xml(
     if reporter:
         reporter.start()
 
-    digest = hashlib.md5(xml_path.read_bytes()).hexdigest()[:6]
-    staging_dir = output_dir / "_staging" / f"{xml_path.stem}-{digest}"
+    # staging 命名与引擎入口（MAX_PATH 防护见 _staging_paths 文档）
+    staging_dir, engine_xml = _staging_paths(xml_path, output_dir)
+    digest = staging_dir.name.rsplit("-", 1)[-1]
 
     def _on_progress(detail: str, frac: float | None = None):
         logger.info(f"  {detail}")
@@ -711,7 +742,7 @@ def convert_xml(
     if reporter:
         reporter.update_stage(1, "XML 解析", f"XML 解析 {xml_path.name}")
     t1 = time.time()
-    parse_xml(xml_path, staging_dir, progress=_on_progress)
+    parse_xml(engine_xml, staging_dir, progress=_on_progress)
     if reporter:
         reporter.complete_stage(1, "XML 解析", time.time() - t1)
 
