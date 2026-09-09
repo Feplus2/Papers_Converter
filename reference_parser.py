@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 
 import config
+import llm_thinking
 from link_extractor import _REF_NUM_RE
 
 logger = logging.getLogger(__name__)
@@ -219,7 +220,8 @@ def _llm_extract(entries: list[dict], use_llm: bool) -> list[dict] | None:
             # "Expecting value: line 1 column 1"），再失败才干净降级
             data = None
             for attempt in range(2):
-                resp = client.chat.completions.create(
+                resp = llm_thinking.chat_create(
+                    client,
                     model=config.DEEPSEEK_MODEL,
                     messages=[
                         {"role": "system",

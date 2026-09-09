@@ -9,6 +9,7 @@ import logging
 import re
 
 import config
+import llm_thinking
 from content_processor import _normalize_inline
 from cover_detect import detect_cover_pages
 
@@ -616,7 +617,8 @@ def _llm_extract(early_blocks: list[dict]) -> dict:
             api_key=config.DEEPSEEK_API_KEY,
             base_url=config.DEEPSEEK_BASE_URL,
         )
-        response = client.chat.completions.create(
+        response = llm_thinking.chat_create(
+            client,
             model=config.DEEPSEEK_MODEL,
             messages=[
                 {"role": "system", "content": "你是学术论文元数据提取专家。只返回 JSON，不要 markdown 代码块。"},

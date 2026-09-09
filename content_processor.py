@@ -11,6 +11,7 @@ from html import unescape
 from pathlib import Path
 
 import config
+import llm_thinking
 from article_boundary import apply_article_boundary
 from cover_detect import detect_cover_pages
 from link_extractor import _REF_NUM_RE  # 条目编号解析与 #ref-N 锚点同源
@@ -611,7 +612,8 @@ def _llm_classify(blocks, heading_idxs, feat, classes, title) -> None:
     )
     try:
         client = OpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_BASE_URL)
-        resp = client.chat.completions.create(
+        resp = llm_thinking.chat_create(
+            client,
             model=config.DEEPSEEK_MODEL,
             messages=[
                 {"role": "system", "content": "你是学术论文结构分析专家。只返回 JSON。"},

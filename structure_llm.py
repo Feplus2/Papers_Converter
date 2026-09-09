@@ -12,6 +12,7 @@ import logging
 import re
 
 import config
+import llm_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,8 @@ def llm_cover_review(content_list: list[dict], rule_cover: set[int]) -> set[int]
     try:
         client = OpenAI(api_key=config.DEEPSEEK_API_KEY,
                         base_url=config.DEEPSEEK_BASE_URL)
-        resp = client.chat.completions.create(
+        resp = llm_thinking.chat_create(
+            client,
             model=config.DEEPSEEK_MODEL,
             messages=[
                 {"role": "system",

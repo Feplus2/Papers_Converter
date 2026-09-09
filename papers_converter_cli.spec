@@ -16,7 +16,9 @@ a = Analysis(
                    # XML 管线（convert_xml 内懒加载，静态分析扫不到）
                    'stage1_xml', 'mathml_tex',
                    # 结构判定模块（structure_llm 为函数内懒加载，静态分析扫不到）
-                   'cover_detect', 'article_boundary', 'structure_llm'],
+                   'cover_detect', 'article_boundary', 'structure_llm',
+                   # 思考参数协商（能关则关/恒思考取最低档；移植自 Books_Converter llm_thinking）
+                   'llm_thinking'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
